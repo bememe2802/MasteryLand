@@ -2,7 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
-import { defaultProgress, MAX_LV, POTIONS, CHECKPOINTS, CATALOG } from '../public/shared.js';
+import { defaultProgress, MAX_LV, POTIONS, CHECKPOINTS, CATALOG } from '../shared/rules.js';
 
 export function openDb(root) {
   fs.mkdirSync(path.join(root, 'data'), { recursive: true });

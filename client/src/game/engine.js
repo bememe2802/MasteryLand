@@ -1,13 +1,14 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
-import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import {
   HALF, VILLAGE_R, RIVER_HW, BRIDGES, SPEED, riverX, inWater, inVillage, clamp, angDiff, CAMPS, ENEMIES, PATHS, distSeg, pathDist,
   VILLAGE_BUILDINGS, NPCS, NPC_RANGE, SAFE_R, CHECKPOINTS, isSafe, ARENA, STYLES, FINISHER, CRIT, SKILL_UNLOCK, SWORDS, GLOVES, ARMORS,
   POTIONS, POTION_CD, SHOPS, CATALOG, xpNeed, maxHpFor, defReduceFor, dmgFor, defaultProgress, ANIMS, NAME_RE, cleanName,
-} from './shared.js';
+} from '../../../shared/rules.js';
 import { api, ensureLogin, logout, connect } from './net.js';
+import { ui, input, game, toast, bigText, showZone, openModal, closeModal } from '../ui/state.js';
 
 const $ = (id) => document.getElementById(id);
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
@@ -96,7 +97,7 @@ const A = {};
 async function loadAssets() {
   const files = ['world', 'anims', 'knight', 'rogue', 'barbarian', 'mage', 'skeleton_minion', 'skeleton_warrior', 'fox'];
   let done = 0;
-  await Promise.all(files.map(f => loader.loadAsync(`assets/${f}.glb`).then(g => { A[f] = g; $('lfill').style.width = `${(++done / files.length) * 100}%`; })));
+  await Promise.all(files.map(f => loader.loadAsync(`assets/${f}.glb`).then(g => { A[f] = g; ui.loading.progress = ++done / files.length; })));
   A.scenes = Object.fromEntries(A.world.scenes.map(s => [s.name, s]));
 }
 
@@ -865,8 +866,8 @@ function drawMinimap() {
   arrow(mctx, S / 2, S / 2, P.rot, 10);
   mctx.restore();
 }
-const bm = $('bigmap'), bctx = bm.getContext('2d');
-function drawBigMap() {
+function drawBigMap(bm) {
+  const bctx = bm.getContext('2d');
   const S = bm.width, sc = S / 240;
   bctx.clearRect(0, 0, S, S);
   bctx.imageSmoothingEnabled = true;
@@ -889,60 +890,28 @@ function drawBigMap() {
 }
 
 function updateHud() {
-  $('hpfill').style.width = `${(P.hp / P.mhp) * 100}%`;
-  $('hptext').textContent = `${Math.ceil(P.hp)} / ${P.mhp}`;
   const m = prog.mastery[prog.style];
-  $('mxfill').style.width = `${(m.xp / xpNeed(m.lv)) * 100}%`;
-  $('atkIcon').textContent = STYLE_UI[prog.style].icon;
-  $('skillIcon').textContent = STYLE_UI[prog.style].skillIcon;
-  $('btnSkill').classList.toggle('locked', m.lv < SKILL_UNLOCK);
   const pots = POTIONS.reduce((s, p) => s + prog.potions[p.id], 0);
-  $('btnPot').classList.toggle('hidden', !pots || !!P.arena);
-  $('potCount').textContent = pots > 1 ? pots : '';
-  if (!$('statsModal').classList.contains('hidden')) renderStats();
-  if (!$('shopModal').classList.contains('hidden')) renderShop();
+  Object.assign(ui.hud, {
+    hp: Math.ceil(P.hp), mhp: P.mhp, xp: m.xp / xpNeed(m.lv),
+    atkIcon: STYLE_UI[prog.style].icon, skillIcon: STYLE_UI[prog.style].skillIcon, skillLocked: m.lv < SKILL_UNLOCK,
+    potions: pots, potHidden: !pots || !!P.arena,
+  });
+  ui.prog = structuredClone(prog);
   hudDirty = false;
 }
 function updateCooldowns() {
   const cd = P.skillCd[prog.style];
-  $('skillCd').textContent = cd > 0 ? Math.ceil(cd) : '';
-  $('btnSkill').style.setProperty('--cd', cd > 0 ? cd / STYLES[prog.style].skillCd : 0);
-  $('btnPot').style.setProperty('--cd', P.potCd > 0 ? P.potCd / POTION_CD : 0);
-  const safe = !P.arena && isSafe(P.x, P.z);
-  $('safeChip').classList.toggle('hidden', !safe);
+  ui.hud.skillCd = cd > 0 ? Math.ceil(cd) : 0;
+  // Rounded to 1/50 so Vue re-renders the cooldown ring a few times a second, not every frame.
+  ui.hud.skillCdK = cd > 0 ? Math.round((cd / STYLES[prog.style].skillCd) * 50) / 50 : 0;
+  ui.hud.potCdK = P.potCd > 0 ? Math.round((P.potCd / POTION_CD) * 50) / 50 : 0;
+  ui.hud.safe = !P.arena && isSafe(P.x, P.z);
 }
-function renderStats() {
-  $('meName').textContent = me.name;
-  const body = $('statsBody'); body.textContent = '';
-  for (const k of ['melee', 'sword', 'defense']) {
-    const m = prog.mastery[k], need = xpNeed(m.lv);
-    const div = document.createElement('div'); div.className = `stat${k === prog.style ? ' on' : ''}`;
-    const sub = k === 'defense' ? `Giảm ${(defReduceFor(prog) * 100).toFixed(1)}% sát thương` : `${STYLES[k].skill}${m.lv < SKILL_UNLOCK ? ` · Lv${SKILL_UNLOCK}` : ''}`;
-    div.innerHTML = `<div class="row"><span class="ms">${MASTERY_INFO[k][1]}</span><span class="name">${MASTERY_INFO[k][0]}</span><span class="lv">Lv ${m.lv}</span></div>
-      <div class="bar"><i style="width:${(m.xp / need) * 100}%"></i></div><div class="sub"><span>${Math.floor(m.xp)} / ${need}</span><span>${sub}</span></div>`;
-    body.appendChild(div);
-  }
-  const dmg = (k) => Math.round(dmgFor(prog, k));
-  const kv = document.createElement('div'); kv.className = 'kv';
-  kv.innerHTML = `<span>Máu tối đa</span><span>${maxHpFor(prog)}</span><span>Sát thương võ</span><span>${dmg('melee')}</span><span>Sát thương kiếm</span><span>${dmg('sword')}</span>
-    <span>Găng</span><span>${GLOVES[prog.gear.glove].name}</span><span>Kiếm</span><span>${SWORDS[prog.gear.sword].name}</span><span>Giáp</span><span>${ARMORS[prog.gear.armor].name}</span>
-    <span>Đấu trường</span><span>${me.rating}</span><span>Vàng</span><span>${prog.gold.toLocaleString('vi-VN')}</span>`;
-  body.appendChild(kv);
-}
-function toast(msg) {
-  const d = document.createElement('div'); d.className = 'toast'; d.textContent = msg; $('toasts').appendChild(d);
-  setTimeout(() => d.remove(), 1900);
-}
-let bigTimer;
-function bigText(main, sub, ms = 1200) {
-  const el = $('bigText'); el.textContent = main;
-  if (sub) { const s = document.createElement('small'); s.textContent = sub; el.appendChild(s); }
-  el.classList.add('show'); clearTimeout(bigTimer); bigTimer = setTimeout(() => el.classList.remove('show'), ms);
-}
-let curZone = '', zoneTimer;
+let curZone = '';
 function checkZone() {
   const z = zoneAt(P.x, P.z);
-  if (z !== curZone) { curZone = z; const el = $('zone'); el.textContent = z; el.classList.add('show'); clearTimeout(zoneTimer); zoneTimer = setTimeout(() => el.classList.remove('show'), 2000); }
+  if (z !== curZone) { curZone = z; showZone(z); }
 }
 function swapStyle() {
   if (P.dash || P.dead) return;
@@ -950,106 +919,15 @@ function swapStyle() {
   net.send({ t: 'style', s: prog.style });
   applyGear(); hudDirty = true;
 }
-
-const SHOP_INFO = { weapon: 'Lò Rèn', armor: 'Tiệm Giáp', potion: 'Tiệm Thuốc' };
-const TAB_INFO = { sword: ['swords', 'Kiếm'], glove: ['sports_mma', 'Găng'], armor: ['shield', 'Giáp'], potion: ['water_drop', 'Thuốc'] };
-let shopRole = 'weapon', shopTab = 'sword';
-const openModal = (id) => $(id).classList.remove('hidden');
-const closeModal = (id) => $(id).classList.add('hidden');
-function openShop(role) { shopRole = role; shopTab = SHOPS[role][0]; renderShop(); openModal('shopModal'); }
-function renderShop() {
-  $('shopTitle').textContent = SHOP_INFO[shopRole];
-  $('shopGold').textContent = prog.gold.toLocaleString('vi-VN');
-  const tabs = $('shopTabs'); tabs.textContent = '';
-  tabs.classList.toggle('hidden', SHOPS[shopRole].length < 2);
-  for (const t of SHOPS[shopRole]) {
-    const b = document.createElement('button'); b.className = t === shopTab ? 'on' : '';
-    b.innerHTML = `<span class="ms">${TAB_INFO[t][0]}</span>${TAB_INFO[t][1]}`;
-    b.onclick = () => { shopTab = t; renderShop(); };
-    tabs.appendChild(b);
-  }
-  const list = $('shopList'); list.textContent = '';
-  CATALOG[shopTab].forEach((it, i) => {
-    const row = document.createElement('div'); row.className = 'item';
-    row.innerHTML = `<div class="sw" style="background:#${it.color.toString(16).padStart(6, '0')}"></div><div class="info"><b></b><span></span></div>`;
-    row.querySelector('b').textContent = shopTab === 'potion' ? `${it.name} · ${prog.potions[it.id]}` : it.name;
-    row.querySelector('.info span').textContent = it.desc;
-    const b = document.createElement('button');
-    if (shopTab === 'potion') {
-      b.textContent = it.price.toLocaleString('vi-VN'); b.disabled = prog.gold < it.price;
-      b.onclick = () => net.send({ t: 'buy', cat: 'potion', i });
-    } else {
-      const owned = prog.owned[shopTab].includes(i), eq = prog.gear[shopTab] === i;
-      if (eq) { b.textContent = 'Đang dùng'; b.disabled = true; }
-      else if (owned) { b.textContent = 'Trang bị'; b.onclick = () => { prog.gear[shopTab] = i; net.send({ t: 'eq', cat: shopTab, i }); applyGear(); renderShop(); }; }
-      else { b.textContent = it.price.toLocaleString('vi-VN'); b.disabled = prog.gold < it.price; b.onclick = () => net.send({ t: 'buy', cat: shopTab, i }); }
-    }
-    row.appendChild(b); list.appendChild(row);
-  });
-}
+const syncMe = () => Object.assign(ui.me, me);
+function openShop(role) { ui.shop.role = role; ui.shop.tab = SHOPS[role][0]; openModal('shop'); }
 async function openArena() {
-  try { const r = await api('/api/me'); Object.assign(me, r.user); } catch { }
-  $('arRating').textContent = me.rating; $('arWins').textContent = me.wins; $('arLosses').textContent = me.losses;
-  syncQueueBtn();
-  openModal('arenaModal');
+  openModal('arena');
+  try { const r = await api('/api/me'); Object.assign(me, r.user); syncMe(); } catch { }
 }
 let queued = false, queuedAt = 0;
-function syncQueueBtn() {
-  const b = $('btnQueue');
-  b.classList.toggle('off', queued);
-  b.innerHTML = queued ? '<span class="ms">close</span>Hủy tìm trận' : '<span class="ms">swords</span>Tìm trận 1 vs 1';
-}
-$('btnQueue').onclick = () => { net.send({ t: queued ? 'unqueue' : 'queue' }); };
-$('queueCancel').onclick = () => net.send({ t: 'unqueue' });
-
-document.querySelectorAll('.modal').forEach(m => {
-  m.addEventListener('pointerdown', (e) => { if (e.target === m) m.classList.add('hidden'); });
-  m.querySelector('[data-close]')?.addEventListener('click', () => m.classList.add('hidden'));
-});
-$('mapModal').addEventListener('click', () => closeModal('mapModal'));
-mm.addEventListener('click', () => { drawBigMap(); openModal('mapModal'); });
-$('btnStats').onclick = () => { renderStats(); $('renameForm').classList.add('hidden'); $('renameErr').textContent = ''; openModal('statsModal'); };
-$('btnLogout').onclick = () => logout();
-$('btnReload').onclick = () => location.reload();
-$('btnRename').onclick = () => { const f = $('renameForm'); f.classList.toggle('hidden'); $('renameInput').value = me.name; $('renameInput').focus(); };
-$('renameForm').onsubmit = async (e) => {
-  e.preventDefault();
-  const name = cleanName($('renameInput').value);
-  if (!NAME_RE.test(name)) { $('renameErr').textContent = 'Tên 2–16 ký tự, chỉ gồm chữ, số, khoảng trắng'; return; }
-  try { const r = await api('/api/me/name', { name }); Object.assign(me, r.user); $('renameForm').classList.add('hidden'); $('renameErr').textContent = ''; renderStats(); }
-  catch (err) { $('renameErr').textContent = err.message; }
-};
-
-const joy = { id: null, x: 0, y: 0, cx: 0, cy: 0 };
-const jz = $('joyzone'), jb = $('joybase'), jk = $('joyknob');
-const JR = 52;
-let joyHome = null;
-jz.addEventListener('pointerdown', (e) => {
-  if (joy.id !== null) return; joy.id = e.pointerId; jz.setPointerCapture(e.pointerId);
-  const r = jb.getBoundingClientRect(); if (!joyHome) joyHome = { l: jb.style.left, b: jb.style.bottom };
-  jb.style.left = `${e.clientX - r.width / 2}px`; jb.style.bottom = `${innerHeight - e.clientY - r.height / 2}px`;
-  joy.cx = e.clientX; joy.cy = e.clientY; joyMove(e);
-});
-jz.addEventListener('pointermove', (e) => { if (e.pointerId === joy.id) joyMove(e); });
-const joyEnd = (e) => { if (e.pointerId !== joy.id) return; joy.id = null; joy.x = joy.y = 0; jk.style.transform = ''; if (joyHome) { jb.style.left = joyHome.l; jb.style.bottom = joyHome.b; } };
-jz.addEventListener('pointerup', joyEnd); jz.addEventListener('pointercancel', joyEnd);
-function joyMove(e) {
-  let dx = e.clientX - joy.cx, dy = e.clientY - joy.cy; const d = Math.hypot(dx, dy);
-  if (d > JR) { dx = dx / d * JR; dy = dy / d * JR; }
-  jk.style.transform = `translate(${dx}px, ${dy}px)`;
-  joy.x = dx / JR; joy.y = dy / JR;
-}
+const setQueued = (on) => { queued = on; queuedAt = performance.now(); ui.queue.on = on; ui.queue.time = '0:00'; };
 let atkHeld = false;
-function holdBtn(el, onDown, onUp) {
-  el.addEventListener('pointerdown', (e) => { e.preventDefault(); el.setPointerCapture(e.pointerId); el.classList.add('press'); onDown(); });
-  const up = () => { el.classList.remove('press'); onUp && onUp(); };
-  el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
-}
-holdBtn($('btnAtk'), () => { atkHeld = true; attack(); }, () => { atkHeld = false; });
-holdBtn($('btnSkill'), skill);
-holdBtn($('btnSwap'), swapStyle);
-holdBtn($('btnPot'), usePotion);
-holdBtn($('btnAct'), () => interact());
 function interact() {
   if (!nearNpc) return;
   if (nearNpc.role === 'arena') openArena(); else openShop(nearNpc.role);
@@ -1064,14 +942,29 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyQ') swapStyle();
   if (e.code === 'KeyE') interact();
   if (e.code === 'KeyR') usePotion();
-  if (e.code === 'KeyM') { drawBigMap(); openModal('mapModal'); }
-  if (e.code === 'KeyC') $('btnStats').click();
-  if (e.code === 'Escape') document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
+  if (e.code === 'KeyM') openModal('map');
+  if (e.code === 'KeyC') openModal('stats');
+  if (e.code === 'Escape') closeModal();
 });
 addEventListener('keyup', (e) => { keys[e.code] = false; if (e.code === 'KeyJ' || e.code === 'Space') atkHeld = false; });
 ['gesturestart', 'gesturechange', 'dblclick'].forEach(ev => document.addEventListener(ev, (e) => e.preventDefault(), { passive: false }));
 document.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
 addEventListener('contextmenu', (e) => e.preventDefault());
+
+// Commands the Vue UI calls.
+Object.assign(game, {
+  attack: (down) => { atkHeld = down; if (down) attack(); },
+  skill: () => skill(),
+  swap: () => swapStyle(),
+  potion: () => usePotion(),
+  interact: () => interact(),
+  buy: (cat, i) => net.send({ t: 'buy', cat, i }),
+  equip: (cat, i) => { prog.gear[cat] = i; net.send({ t: 'eq', cat, i }); applyGear(); hudDirty = true; },
+  toggleQueue: () => net.send({ t: queued ? 'unqueue' : 'queue' }),
+  rename: async (name) => { const r = await api('/api/me/name', { name }); Object.assign(me, r.user); syncMe(); },
+  logout: () => logout(),
+  drawBigMap: (canvas) => drawBigMap(canvas),
+});
 
 function onNet(m) {
   switch (m.t) {
@@ -1095,7 +988,7 @@ function onNet(m) {
     case 'pos': {
       P.x = m.x; P.z = m.z; P.kx = P.kz = 0; P.dash = null;
       if (P.arena && m.z < 250) leaveArena();
-      if (P.dead) { P.dead = false; P.actT = 0; $('death').classList.add('hidden'); player.play(prog.style === 'sword' ? 'Idle' : 'Unarmed_Idle', { fade: 0 }); }
+      if (P.dead) { P.dead = false; P.actT = 0; ui.dead = false; player.play(prog.style === 'sword' ? 'Idle' : 'Unarmed_Idle', { fade: 0 }); }
       camera.position.set(P.x, 0, P.z).add(CAM_OFF);
       break;
     }
@@ -1114,10 +1007,10 @@ function onNet(m) {
       break;
     }
     case 'bought': { const it = CATALOG[m.cat][m.i]; toast(`Đã mua ${it.name}`); if (m.cat !== 'potion') applyGear(); break; }
-    case 'queue': queued = m.on; queuedAt = performance.now(); $('queueChip').classList.toggle('hidden', !queued); syncQueueBtn(); break;
+    case 'queue': setQueued(m.on); break;
     case 'match': enterArena(m); break;
     case 'mend': {
-      me.rating = m.rating; me.wins = m.wins; me.losses = m.losses;
+      me.rating = m.rating; me.wins = m.wins; me.losses = m.losses; syncMe();
       if (P.arena) P.arena.state = 'done';
       const label = m.result === 'win' ? 'Chiến thắng' : m.result === 'lose' ? 'Thất bại' : 'Hòa';
       bigText(label, `${m.delta >= 0 ? '+' : ''}${m.delta} điểm · +${m.reward} vàng`, 2800);
@@ -1125,10 +1018,10 @@ function onNet(m) {
     }
     case 'kicked': openModal('kicked'); break;
     case 'welcome': {
-      Object.assign(me, m.me); onProg(m.prog);
+      Object.assign(me, m.me); syncMe(); onProg(m.prog);
       if (P.arena) leaveArena();
-      queued = false; $('queueChip').classList.add('hidden'); syncQueueBtn();
-      P.dead = false; P.dash = null; P.pending.length = 0; $('death').classList.add('hidden');
+      setQueued(false);
+      P.dead = false; P.dash = null; P.pending.length = 0; ui.dead = false;
       onNet({ t: 'pos', x: m.x, z: m.z });
       for (const r of remotes.values()) r.dispose();
       remotes.clear();
@@ -1154,21 +1047,22 @@ function die(by) {
   if (P.dead) return;
   P.dead = true; P.deadT = 0; P.pending.length = 0; P.dash = null;
   player.play('Death_A', { once: true, fade: 0.1 });
-  if (!P.arena) setTimeout(() => { if (P.dead) { $('death').classList.remove('hidden'); } }, 700);
+  if (!P.arena) setTimeout(() => { if (P.dead) ui.dead = true; }, 700);
   if (by) toast(by);
 }
 function enterArena(m) {
-  queued = false; $('queueChip').classList.add('hidden'); closeModal('arenaModal'); syncQueueBtn();
+  setQueued(false); closeModal('arena');
   buildArena(m.slot);
   const now = performance.now();
   P.arena = { slot: m.slot, center: ARENA.center(m.slot), opp: m.opp, state: 'countdown', startAt: now + m.startIn, endAt: now + m.startIn + m.duration, hp: {} };
-  $('oppName').textContent = m.opp.name;
-  $('arenaHud').classList.remove('hidden');
+  Object.assign(ui.arena, { show: true, opp: m.opp.name, oppHp: 100 });
+  hudDirty = true;
   scene.fog.far = 60;
 }
 function leaveArena() {
   P.arena = null;
-  $('arenaHud').classList.add('hidden');
+  ui.arena.show = false;
+  hudDirty = true;
   scene.fog.far = 80;
 }
 function updateArena() {
@@ -1181,9 +1075,9 @@ function updateArena() {
   }
   if (P.hp <= 0 && !P.dead) { P.dead = true; P.deadT = 0; P.pending.length = 0; player.play('Death_A', { once: true, fade: 0.1 }); }
   const opp = remotes.get(a.opp.id);
-  $('oppFill').style.width = `${opp ? opp.hp : 100}%`;
+  ui.arena.oppHp = opp ? opp.hp : 100;
   const t = Math.max(0, Math.ceil((a.endAt - Math.max(now, a.startAt)) / 1000));
-  $('arenaTime').textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+  ui.arena.time = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
 }
 
 const clock = new THREE.Clock();
@@ -1197,7 +1091,7 @@ function updatePlayer(dt, time) {
     r.position.set(P.x, 0, P.z); return;
   }
   for (let i = P.pending.length - 1; i >= 0; i--) { const p = P.pending[i]; p.t -= dt; if (p.t <= 0) { P.pending.splice(i, 1); p.fn(); } }
-  let ix = joy.x, iz = joy.y;
+  let ix = input.joyX, iz = input.joyY;
   if (!typing()) {
     if (keys.KeyA || keys.ArrowLeft) ix -= 1; if (keys.KeyD || keys.ArrowRight) ix += 1;
     if (keys.KeyW || keys.ArrowUp) iz -= 1; if (keys.KeyS || keys.ArrowDown) iz += 1;
@@ -1228,9 +1122,8 @@ function updatePlayer(dt, time) {
   if (!P.arena) for (const n of world.npcs) if (Math.hypot(P.x - n.x, P.z - n.z) < NPC_RANGE) nn = n;
   if (nn !== nearNpc) {
     nearNpc = nn;
-    $('btnAct').classList.toggle('hidden', !nn);
-    if (nn) $('actIcon').textContent = nn.look.icon;
-    else { closeModal('shopModal'); closeModal('arenaModal'); }
+    ui.hud.actIcon = nn ? nn.look.icon : null;
+    if (!nn) { closeModal('shop'); closeModal('arena'); }
   }
   if (!P.arena && time - P.cpSent > 1) for (const c of CHECKPOINTS) {
     if (Math.hypot(P.x - c.x, P.z - c.z) < 3.5 && (prog.checkpoint !== c.id)) { P.cpSent = time; net.send({ t: 'cp', id: c.id }); }
@@ -1269,7 +1162,7 @@ function frame(dt, time) {
   renderer.render(scene, camera);
   drawOverlay(dt);
   hudT -= dt; if (hudT <= 0 || hudDirty) { if (hudDirty) updateHud(); updateCooldowns(); hudT = 0.1; }
-  mmT -= dt; if (mmT <= 0) { drawMinimap(); checkZone(); mmT = 0.1; if (queued) { const s = Math.floor((performance.now() - queuedAt) / 1000); $('queueTime').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; } }
+  mmT -= dt; if (mmT <= 0) { drawMinimap(); checkZone(); mmT = 0.1; if (queued) { const s = Math.floor((performance.now() - queuedAt) / 1000); ui.queue.time = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; } }
   stT -= dt;
   if (stT <= 0) { stT = 0.1; net.send({ t: 'st', x: Math.round(P.x * 100) / 100, z: Math.round(P.z * 100) / 100, r: Math.round(P.rot * 100) / 100, a: Math.max(0, ANIMS.indexOf(player.clip)) }); }
 }
@@ -1283,13 +1176,13 @@ async function boot() {
   const assets = loadAssets();
   let user;
   try { user = await ensureLogin(); }
-  catch { $('authErr').textContent = 'Không kết nối được máy chủ'; $('auth').classList.remove('hidden'); return; }
-  try { await assets; } catch { $('authErr').textContent = 'Không tải được mô hình'; $('auth').classList.remove('hidden'); return; }
-  Object.assign(me, user);
+  catch { ui.loading.error = 'Không kết nối được máy chủ'; ui.loading.auth = true; return; }
+  try { await assets; } catch { ui.loading.error = 'Không tải được mô hình'; ui.loading.auth = true; return; }
+  Object.assign(me, user); syncMe();
   const welcome = await new Promise((resolve) => {
-    net = connect((m) => { if (m.t === 'welcome') resolve(m); else if (started) onNet(m); }, (ok) => $('netChip').classList.toggle('hidden', ok));
+    net = connect((m) => { if (m.t === 'welcome') resolve(m); else if (started) onNet(m); }, (ok) => { ui.online = ok; });
   });
-  Object.assign(me, welcome.me);
+  Object.assign(me, welcome.me); syncMe();
   prog = welcome.prog; P.x = welcome.x; P.z = welcome.z; P.hp = welcome.hp; P.mhp = maxHpFor(prog);
   Enemy.foxScale = 2.7 / measureLength(A.fox.scene);
   initParticles();
@@ -1303,11 +1196,11 @@ async function boot() {
   camera.position.set(P.x, 0, P.z).add(CAM_OFF);
   renderer.compile(scene, camera);
   updateHud();
-  $('loading').remove();
+  ui.booted = true;
   started = true;
   if (new URLSearchParams(location.search).has('debug')) window.__game = { P, enemies, remotes, get prog() { return prog; }, net, step: (sec, dt = 1 / 30) => { for (let t = 0; t < sec; t += dt) frame(dt, clock.elapsedTime += dt); } };
   loop();
 }
 let started = false;
 function spawnEnemies() { let id = 0; for (const c of CAMPS) for (let i = 0; i < c.n; i++) enemies.push(new Enemy(id++, c.type, c)); }
-boot();
+export const start = boot;

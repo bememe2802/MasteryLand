@@ -7,10 +7,24 @@ Game 3D góc nhìn từ trên xuống cho mobile: đánh để tăng thông th�
 ```bash
 npm install
 cp .env.example .env
+npm run build
 npm start
 ```
 
 Mở http://localhost:5173
+
+Khi sửa giao diện: chạy `npm run dev` (server) và `npm run dev:client` (Vite, tự tải lại), rồi mở http://localhost:5174.
+
+## Cấu trúc
+
+| Thư mục | Nội dung |
+|---|---|
+| `client/src/game/` | Vòng lặp game bằng JavaScript thuần: Three.js, va chạm, quái, hiệu ứng, minimap, kết nối WebSocket |
+| `client/src/ui/` | Giao diện bằng Vue 3: HUD, joystick, nút hành động, bảng chỉ số, cửa hàng, đấu trường, bản đồ, đăng nhập |
+| `shared/rules.js` | Luật game dùng chung cho client và server: chỉ số, đồ, bản đồ, công thức sát thương |
+| `server/` | Express + `ws` + SQLite |
+
+Game và giao diện chỉ gặp nhau ở `client/src/ui/state.js`. Game ghi vài con số đã định dạng vào một object `reactive` (tối đa 10 lần/giây, Vue bỏ qua giá trị không đổi). Vị trí, mesh và trạng thái thế giới không bao giờ đi qua reactivity của Vue, nên vòng lặp 60 khung hình/giây không tốn thêm gì cho Vue. Joystick ghi thẳng vào một object thường để game đọc mỗi khung hình.
 
 ## Đăng nhập Google
 

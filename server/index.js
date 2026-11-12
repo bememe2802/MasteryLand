@@ -9,7 +9,7 @@ import { WebSocketServer } from 'ws';
 import { OAuth2Client } from 'google-auth-library';
 import { openDb } from './db.js';
 import { createGame } from './game.js';
-import { NAME_RE, cleanName } from '../public/shared.js';
+import { NAME_RE, cleanName } from '../shared/rules.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 try { process.loadEnvFile(path.join(ROOT, '.env')); } catch { }
@@ -39,16 +39,22 @@ function limiter(max, windowMs) {
   };
 }
 
-const indexHtml = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
+// The client is built by Vite (npm run build) into dist/.
+const CLIENT = path.join(ROOT, 'dist');
+if (!fs.existsSync(path.join(CLIENT, 'index.html'))) {
+  console.error('dist/ is missing: run `npm run build` first.');
+  process.exit(1);
+}
+const indexHtml = fs.readFileSync(path.join(CLIENT, 'index.html'), 'utf8');
 const inlineHashes = [...indexHtml.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)]
   .map(m => `'sha256-${crypto.createHash('sha256').update(m[1]).digest('base64')}'`).join(' ');
 const CSP = [
   "default-src 'self'",
-  `script-src 'self' 'wasm-unsafe-eval' ${inlineHashes} https://cdn.jsdelivr.net https://accounts.google.com/gsi/client`,
+  `script-src 'self' 'wasm-unsafe-eval' ${inlineHashes} https://accounts.google.com/gsi/client`,
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com/gsi/style",
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data: blob: https://*.googleusercontent.com",
-  "connect-src 'self' blob: data: ws: wss: https://cdn.jsdelivr.net https://accounts.google.com/gsi/",
+  "connect-src 'self' blob: data: ws: wss: https://accounts.google.com/gsi/",
   'frame-src https://accounts.google.com/gsi/',
   "worker-src 'self' blob:",
   "object-src 'none'",
@@ -116,8 +122,9 @@ app.post('/api/me/name', limiter(10, 60000), auth, (req, res) => {
 });
 app.post('/api/logout', (req, res) => { store.dropSession(bearer(req)); res.json({ ok: true }); });
 
-app.use('/assets', express.static(path.join(ROOT, 'public', 'assets'), { maxAge: '7d' }));
-app.use(express.static(path.join(ROOT, 'public'), { setHeaders: (r) => r.setHeader('Cache-Control', 'no-cache') }));
+// dist/assets holds the hashed bundles and the 3D models, both safe to cache.
+app.use('/assets', express.static(path.join(CLIENT, 'assets'), { maxAge: '7d' }));
+app.use(express.static(CLIENT, { setHeaders: (r) => r.setHeader('Cache-Control', 'no-cache') }));
 
 const server = http.createServer(app);
 server.headersTimeout = 15000;

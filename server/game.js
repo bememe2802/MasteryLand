@@ -1,7 +1,7 @@
 import {
   HALF, SPEED, inWater, isSafe, CAMPS, ENEMIES, ENEMY_LIST, NPCS, NPC_RANGE, CHECKPOINTS, ARENA, STYLES, FINISHER, CRIT,
   SKILL_UNLOCK, MAX_LV, CATALOG, SHOPS, POTIONS, POTION_CD, ANIMS, xpNeed, maxHpFor, defReduceFor, dmgFor,
-} from '../public/shared.js';
+} from '../shared/rules.js';
 
 const VIEW = 60;
 const CELL = 60;

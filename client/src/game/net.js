@@ -16,38 +16,38 @@ export async function api(path, body) {
   return j;
 }
 
-const $ = (id) => document.getElementById(id);
+import { ui } from '../ui/state.js';
+
 const waitFor = (fn, ms = 8000) => new Promise((res, rej) => {
   const t0 = Date.now();
   (function tick() { const v = fn(); if (v) res(v); else if (Date.now() - t0 > ms) rej(new Error('timeout')); else setTimeout(tick, 80); })();
 });
+
+/** What the login screen calls: draw Google's button into an element, or use the dev login. */
+export const loginHooks = { renderGoogle: (el) => {}, dev: () => {} };
 
 export async function ensureLogin() {
   if (getToken()) {
     try { return (await api('/api/me')).user; } catch (e) { if (e.status === 401) clearToken(); else throw e; }
   }
   const cfg = await api('/api/config');
-  const box = $('auth'), err = $('authErr');
-  box.classList.remove('hidden');
   return new Promise((resolve) => {
-    const done = (j) => { setToken(j.token); box.classList.add('hidden'); resolve(j.user); };
-    const fail = (e) => { err.textContent = e.message; };
-    if (cfg.googleClientId) {
+    const done = (j) => { setToken(j.token); ui.loading.auth = false; resolve(j.user); };
+    const fail = (e) => { ui.loading.error = e.message; };
+    loginHooks.renderGoogle = (el) => {
+      if (!cfg.googleClientId) { fail(new Error('Máy chủ chưa cấu hình Google Client ID')); return; }
       waitFor(() => window.google?.accounts?.id).then((gid) => {
         gid.initialize({
           client_id: cfg.googleClientId,
           callback: ({ credential }) => api('/api/auth/google', { credential }).then(done, fail),
           ux_mode: 'popup',
         });
-        gid.renderButton($('gbtn'), { theme: 'filled_black', size: 'large', shape: 'pill', text: 'continue_with', locale: 'vi', width: 260 });
+        gid.renderButton(el, { theme: 'filled_black', size: 'large', shape: 'pill', text: 'continue_with', locale: 'vi', width: 260 });
       }, () => fail(new Error('Không tải được Google Sign-In')));
-    } else {
-      fail(new Error('Máy chủ chưa cấu hình Google Client ID'));
-    }
-    if (cfg.devLogin) {
-      const b = $('devLogin'); b.classList.remove('hidden');
-      b.onclick = () => api('/api/auth/dev', { tag: new URLSearchParams(location.search).get('dev') || 'dev' }).then(done, fail);
-    }
+    };
+    loginHooks.dev = () => api('/api/auth/dev', { tag: new URLSearchParams(location.search).get('dev') || 'dev' }).then(done, fail);
+    ui.loading.devLogin = !!cfg.devLogin;
+    ui.loading.auth = true;
   });
 }
 

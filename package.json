@@ -4,8 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "vite build",
     "start": "node server/index.js",
-    "dev": "node --watch server/index.js"
+    "dev": "node --watch server/index.js",
+    "dev:client": "vite"
   },
   "engines": {
     "node": ">=20.12"
@@ -15,6 +17,12 @@
     "compression": "^1.8.2",
     "express": "^4.22.3",
     "google-auth-library": "^9.15.1",
+    "three": "^0.160.0",
+    "vue": "^3.5.13",
     "ws": "^8.22.2"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "vite": "^6.0.7"
   }
 }
