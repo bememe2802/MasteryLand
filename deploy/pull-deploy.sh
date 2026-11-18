@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Continuous deployment, run by cron every minute on the Oracle host (root):
 # fetch main, and when it moved, build and restart the game from that commit.
-# The host reads the GitHub repo with a read-only deploy key (/root/.ssh/arenix_deploy).
+# The repo is public, so the host reads it over HTTPS with no key at all.
 # A failed build leaves the running game as it was and is retried on the next commit.
 set -euo pipefail
 REPO=/opt/arenix/repo
