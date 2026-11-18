@@ -3,25 +3,34 @@ import { computed, ref } from 'vue';
 import { ui, game } from '../state.js';
 import Sheet from './Sheet.vue';
 import {
-  xpNeed, defReduceFor, dmgFor, maxHpFor, STYLES, SKILL_UNLOCK, GLOVES, SWORDS, ARMORS, NAME_RE, cleanName,
+  xpNeed, defReduceFor, dmgFor, maxHpFor, critFor, speedFor, SPEED, STYLES, SKILL_UNLOCK, POWER_BY_ID, NAME_RE, cleanName,
 } from '../../../../shared/rules.js';
 
 const MASTERY = { melee: ['Võ Thuật', 'sports_mma'], sword: ['Kiếm Thuật', 'swords'], defense: ['Phòng Thủ', 'shield'] };
 
 const prog = computed(() => ui.prog);
-const rows = computed(() => Object.entries(MASTERY).map(([k, [name, icon]]) => {
-  const m = prog.value.mastery[k], need = xpNeed(m.lv);
-  const sub = k === 'defense'
-    ? `Giảm ${(defReduceFor(prog.value) * 100).toFixed(1)}% sát thương`
-    : `${STYLES[k].skill}${m.lv < SKILL_UNLOCK ? ` · Lv${SKILL_UNLOCK}` : ''}`;
-  return { k, name, icon, lv: m.lv, xp: Math.floor(m.xp), need, pct: (m.xp / need) * 100, sub, on: k === prog.value.style };
-}));
+const rows = computed(() => {
+  const out = Object.entries(MASTERY).map(([k, [name, icon]]) => {
+    const m = prog.value.mastery[k], need = xpNeed(m.lv);
+    const sub = k === 'defense'
+      ? `Giảm ${(defReduceFor(prog.value) * 100).toFixed(1)}% sát thương`
+      : `${STYLES[k].skill}${m.lv < SKILL_UNLOCK ? ` · Lv${SKILL_UNLOCK}` : ''}`;
+    return { k, name, icon, lv: m.lv, xp: Math.floor(m.xp), need, pct: (m.xp / need) * 100, sub, on: k === prog.value.style };
+  });
+  const pw = prog.value.power;
+  if (pw) {
+    const def = POWER_BY_ID[pw.id], need = xpNeed(pw.lv);
+    out.splice(2, 0, { k: 'power', name: def.name, icon: def.icon, lv: pw.lv, xp: Math.floor(pw.xp), need, pct: (pw.xp / need) * 100, sub: def.desc, on: prog.value.style === 'power' });
+  }
+  return out;
+});
 const facts = computed(() => {
   const p = prog.value, dmg = (k) => Math.round(dmgFor(p, k));
   return [
     ['Máu tối đa', maxHpFor(p)], ['Sát thương võ', dmg('melee')], ['Sát thương kiếm', dmg('sword')],
-    ['Găng', GLOVES[p.gear.glove].name], ['Kiếm', SWORDS[p.gear.sword].name], ['Giáp', ARMORS[p.gear.armor].name],
-    ['Đấu trường', ui.me.rating], ['Vàng', p.gold.toLocaleString('vi-VN')],
+    ...(p.power ? [['Sát thương sức mạnh', dmg('power')]] : []),
+    ['Chí mạng', `${Math.round(critFor(p) * 100)}%`], ['Tốc chạy', `${Math.round((speedFor(p) / SPEED) * 100)}%`],
+    ['Đấu trường', ui.me.rating], ['Vàng', p.gold.toLocaleString('vi-VN')], ['Ngọc', p.gems.toLocaleString('vi-VN')],
   ];
 });
 

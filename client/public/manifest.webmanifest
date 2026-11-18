@@ -1,0 +1,18 @@
+{
+  "name": "Arenix",
+  "short_name": "Arenix",
+  "description": "Game nhập vai hành động 3D trên điện thoại.",
+  "lang": "vi",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "landscape",
+  "background_color": "#0a1322",
+  "theme_color": "#0a1322",
+  "icons": [
+    { "src": "/brand/arenix-icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "/brand/arenix-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/brand/arenix-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

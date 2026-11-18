@@ -1,4 +1,4 @@
-# Mastery Land
+# Arenix
 
 Game 3D góc nhìn từ trên xuống cho mobile: đánh để tăng thông thạo (Võ, Kiếm, Phòng Thủ), PvP ngoài vùng an toàn, đấu trường 1 vs 1.
 

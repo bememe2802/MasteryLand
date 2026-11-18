@@ -1,0 +1,33 @@
+name: CI
+
+# Every push and pull request is built and checked here. The Oracle host deploys main by itself:
+# it pulls new commits every minute (deploy/pull-deploy.sh), so no server key lives in GitHub.
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Build the client
+        run: npx vite build
+      - name: Check the server and shared code parse
+        run: for f in server/*.js shared/*.js; do node --check "$f"; done
+      - name: Start the server and ask it for its config
+        env:
+          PORT: 3999
+          DEV_LOGIN: '1'
+        run: |
+          node server/index.js & pid=$!
+          for i in $(seq 1 20); do curl -fs http://127.0.0.1:3999/api/config && break; sleep 0.5; done
+          curl -fs http://127.0.0.1:3999/ | grep -q '<title>Arenix</title>'
+          kill $pid
+      - name: Docker image builds
+        run: docker build -t arenix:ci .

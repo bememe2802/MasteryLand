@@ -1,9 +1,13 @@
 import {
-  HALF, SPEED, inWater, isSafe, CAMPS, ENEMIES, ENEMY_LIST, NPCS, NPC_RANGE, CHECKPOINTS, ARENA, STYLES, FINISHER, CRIT,
-  SKILL_UNLOCK, MAX_LV, CATALOG, SHOPS, POTIONS, POTION_CD, ANIMS, xpNeed, maxHpFor, defReduceFor, dmgFor,
+  HALF, inWater, isSafe, CAMPS, ENEMIES, ENEMY_LIST, NPCS, NPC_RANGE, CHECKPOINTS, ARENA, STYLES, FINISHER, CRIT,
+  SKILL_UNLOCK, MAX_LV, ITEMS, SELL_AT, GEAR_SLOTS, POTION_CD, ANIMS, POWERS, POWER_BY_ID, POWER_UNLOCK, PURGE_COST,
+  DROPS, bossGems, QUEST_BY_ID, QUEST_MAX, BOARD_OFF, xpNeed, maxHpFor, defReduceFor, dmgFor, critFor, speedFor, masteryOf, styleOk, shrineStock,
+  moveReach, moveHits, moveWindow,
 } from '../shared/rules.js';
 
 const VIEW = 60;
+// Players appear just beside a checkpoint crystal, not inside its pillar.
+const SPAWN_OFF = 2.4;
 const CELL = 60;
 const TICK = 100;
 const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : NaN);
@@ -39,10 +43,10 @@ export function createGame({ store, maxPlayers = 500, log = console }) {
     const now = Date.now();
     const p = {
       ws, id: u.id, name: u.name, prog, progDirty: false, saveDirty: false,
-      x: cp.x, z: cp.z, r: 0, a: 0, lastPos: { x: cp.x, z: cp.z, t: now }, hp: maxHpFor(prog), dead: false, deadAt: 0, lastHurt: 0,
-      swing: null, skill: null, nextSwing: 0, nextSkill: { melee: 0, sword: 0 }, potAt: 0,
+      x: cp.x, z: cp.z + SPAWN_OFF, r: 0, a: 0, lastPos: { x: cp.x, z: cp.z + SPAWN_OFF, t: now }, hp: maxHpFor(prog), dead: false, deadAt: 0, lastHurt: 0,
+      swing: null, skill: null, pcast: null, nextSwing: 0, nextSkill: { melee: 0, sword: 0 }, nextPw: [0, 0, 0], potAt: 0, boostUntil: 0, boost: 0,
       enemies: new Map(), known: new Set(), lastAttacker: null, match: null, queued: false, returnTo: null,
-      msgs: 0, msgWin: now, strikes: 0, strikeWin: now, logged: new Map(),
+      msgs: 0, msgWin: now, strikes: 0, strikeWin: now, logged: new Map(), lookVer: 1, seenLook: new Map(),
     };
     online.set(u.id, p);
     send(p, { t: 'welcome', me: { id: u.id, name: u.name, rating: u.rating, wins: u.wins, losses: u.losses }, prog, x: p.x, z: p.z, hp: p.hp });
@@ -83,8 +87,8 @@ export function createGame({ store, maxPlayers = 500, log = console }) {
 
   const markProg = (p) => { p.progDirty = true; p.saveDirty = true; };
   function gainXp(p, key, amt) {
-    const m = p.prog.mastery[key];
-    if (m.lv >= MAX_LV) return;
+    const m = masteryOf(p.prog, key);
+    if (!m || m.lv >= MAX_LV) return;
     m.xp += amt;
     while (m.xp >= xpNeed(m.lv) && m.lv < MAX_LV) {
       m.xp -= xpNeed(m.lv); m.lv++;
@@ -118,9 +122,57 @@ export function createGame({ store, maxPlayers = 500, log = console }) {
     return { e, t: ENEMIES[e.type], rec };
   }
   function attackWindow(p, k, now) {
+    if (k === 'p') return p.pcast && now - p.pcast.at < moveWindow(p.pcast.mv) * 1000 ? p.pcast : null;
     if (k === 's') return p.skill && now - p.skill.at < 900 ? p.skill : null;
     return p.swing && now - p.swing.at < 700 ? p.swing : null;
   }
+  // Facing the client claimed when it pressed attack; falls back to the last reported facing.
+  const aimOf = (p, m) => { const r = n(m.r); return Number.isNaN(r) ? p.r || 0 : r; };
+  // Is t inside the swing cone from (ox, oz)? Extra slack covers ~150ms of movement on both sides.
+  function inCone(ox, oz, rot, t, halfArc) {
+    const dx = t.x - ox, dz = t.z - oz, d = Math.hypot(dx, dz);
+    if (d < 1.5) return true;
+    const ang = Math.acos(Math.max(-1, Math.min(1, (dx * Math.sin(rot) + dz * Math.cos(rot)) / d)));
+    return ang <= halfArc + 0.5 + Math.min(0.6, 1.2 / d);
+  }
+  /** Count one more hit of this attack on this target, if the attack allows another. */
+  function takeHit(w, key) {
+    const n = w.hits instanceof Map ? w.hits.get(key) || 0 : w.hits.has(key) ? 1 : 0;
+    if (n >= (w.mv ? moveHits(w.mv) : 1)) return false;
+    if (w.hits instanceof Map) w.hits.set(key, n + 1); else w.hits.add(key);
+    return true;
+  }
+  /** Could this power cast have reached target t? Positions lag, so the checks are generous. */
+  function powerReaches(w, t) {
+    const mv = w.mv, slack = 2.5;
+    const fx = Math.sin(w.r), fz = Math.cos(w.r);
+    if (mv.k === 'nova') return Math.hypot(t.x - w.x, t.z - w.z) <= mv.radius + slack;
+    if (mv.k === 'zone') return Math.hypot(t.x - (w.x + fx * mv.dist), t.z - (w.z + fz * mv.dist)) <= mv.radius + slack;
+    if (mv.k === 'leap') return Math.hypot(t.x - (w.x + fx * mv.range), t.z - (w.z + fz * mv.range)) <= mv.radius + slack + 2;
+    if (Math.hypot(t.x - w.x, t.z - w.z) > moveReach(mv) + slack) return false;
+    const half = mv.k === 'cone' ? mv.arc / 2 : mv.k === 'bolt' ? (mv.spread || 0) * ((mv.count || 1) - 1) / 2 + 0.2 : 0.25;
+    return inCone(w.x, w.z, w.r, t, half);
+  }
+  function addItem(p, id, n) {
+    if (!ITEMS[id]) return false;
+    p.prog.inv[id] = Math.min(9999, (p.prog.inv[id] || 0) + n);
+    return true;
+  }
+  function takeItem(p, id, n) {
+    p.prog.inv[id] = (p.prog.inv[id] || 0) - n;
+    if (p.prog.inv[id] <= 0) delete p.prog.inv[id];
+  }
+  function equip(p, slot, id) {
+    p.prog.gear[slot] = id;
+    p.hp = Math.min(p.hp, maxHpFor(p.prog));
+    p.lookVer++;
+  }
+  /** Send to every player close enough to see p (power effects). */
+  function relay(p, msg) {
+    const data = JSON.stringify(msg);
+    for (const o of online.values()) if (o !== p && o.ws.readyState === 1 && Math.abs(o.x - p.x) < VIEW && Math.abs(o.z - p.z) < VIEW) o.ws.send(data);
+  }
+  const nearBoard = (p, id) => { const c = CHECKPOINTS.find(x => x.id === id); return c && Math.hypot(p.x - c.x - BOARD_OFF.x, p.z - c.z - BOARD_OFF.z) < NPC_RANGE + 2.5; };
   const nearNpc = (p, role) => NPCS.some(c => c.role === role && Math.hypot(p.x - c.x, p.z - c.z) < NPC_RANGE + 2.5);
 
   const handlers = {
@@ -130,7 +182,7 @@ export function createGame({ store, maxPlayers = 500, log = console }) {
       if (Number.isNaN(x) || Number.isNaN(z)) return;
       const dt = Math.min(1, Math.max(0.05, (now - p.lastPos.t) / 1000));
       const dashing = p.skill && p.skill.style === 'sword' && now - p.skill.at < 800;
-      const allowed = SPEED * 1.4 * dt + 2.5 + (dashing ? 9 : 0);
+      const allowed = speedFor(p.prog) * 1.4 * dt + 2.5 + (dashing ? 9 : 0) + (now < p.boostUntil ? p.boost : 0);
       const d = Math.hypot(x - p.lastPos.x, z - p.lastPos.z);
       let ok = d <= allowed;
       if (p.match) { const c = ARENA.center(p.match.slot); ok = ok && Math.hypot(x - c.x, z - c.z) <= ARENA.r + 1; }
@@ -142,28 +194,29 @@ export function createGame({ store, maxPlayers = 500, log = console }) {
       if (Number.isInteger(m.a) && m.a >= 0 && m.a < ANIMS.length) p.a = m.a;
     },
     sw(p, m, now) {
-      if (p.dead || now < p.nextSwing - 40) return;
+      if (p.dead || now < p.nextSwing - 40 || !styleOk(p.prog, p.prog.style)) return;
       const st = STYLES[p.prog.style];
       p.nextSwing = now + st.cd * 850;
-      p.swing = { at: now, style: p.prog.style, hits: new Set() };
+      p.swing = { at: now, style: p.prog.style, hits: new Set(), r: aimOf(p, m), x: p.x, z: p.z };
       gainXp(p, p.prog.style, 1);
     },
     sk(p, m, now) {
       const style = p.prog.style;
-      if (p.dead || p.prog.mastery[style].lv < SKILL_UNLOCK || now < p.nextSkill[style] - 150) return;
+      if (style === 'power' || p.dead || !styleOk(p.prog, style) || p.prog.mastery[style].lv < SKILL_UNLOCK || now < p.nextSkill[style] - 150) return;
       p.nextSkill[style] = now + STYLES[style].skillCd * 1000;
-      p.skill = { at: now, style, hits: new Set() };
+      p.skill = { at: now, style, hits: new Set(), r: aimOf(p, m), x: p.x, z: p.z };
       gainXp(p, style, 3);
     },
     he(p, m, now) {
       const w = attackWindow(p, m.k, now);
-      if (!w || w.hits.has(m.e)) return;
+      if (!w || !takeHit(w, m.e)) return;
       const c = enemyCheck(p, m.e, now);
       if (!c) return;
-      w.hits.add(m.e);
-      const mult = m.k === 's' ? STYLES[w.style].skillMult : FINISHER;
+      // Credit the most this hit could have dealt (crit, and burn ticking after it); a kill needs the sum to cover the HP.
+      const mult = m.k === 'p' ? w.mv.mult * (w.mv.fx === 'burn' ? 1.45 : 1) : m.k === 's' ? STYLES[w.style].skillMult : FINISHER;
       c.rec.dmg += dmgFor(p.prog, w.style, mult) * 1.1 * CRIT.mult;
-      gainXp(p, w.style, m.k === 's' ? 2 + c.t.lv * 0.6 : c.t.lv * 0.35);
+      const xp = m.k === 'p' ? (2 + c.t.lv * 0.6) / moveHits(w.mv) : m.k === 's' ? 2 + c.t.lv * 0.6 : c.t.lv * 0.35;
+      gainXp(p, w.style, xp);
     },
     ke(p, m, now) {
       const c = enemyCheck(p, m.e, now);
@@ -172,8 +225,20 @@ export function createGame({ store, maxPlayers = 500, log = console }) {
       c.rec.dmg = 0; c.rec.deadUntil = now + c.t.respawn * 1000 - 800;
       const g = Math.round(rnd(c.t.gold[0], c.t.gold[1]));
       p.prog.gold += g;
+      const items = [];
+      for (const [id, chance] of DROPS[c.e.type] || []) {
+        if (Math.random() >= chance) continue;
+        const got = id === 'power' ? `pw_${POWERS[Math.floor(Math.random() * POWERS.length)].id}` : id;
+        if (addItem(p, got, 1)) items.push(got);
+      }
+      const gems = c.t.boss ? bossGems(c.t) : 0;
+      for (const [qid, n] of Object.entries(p.prog.quests)) {
+        const q = QUEST_BY_ID[qid];
+        if (q.type === c.e.type && n < q.count) p.prog.quests[qid] = n + 1;
+      }
+      p.prog.gems += gems;
       gainXp(p, p.prog.style, c.t.lv * 3 + 4);
-      send(p, { t: 'loot', e: m.e, g });
+      send(p, { t: 'loot', e: m.e, g, items, gems });
     },
     ue(p, m, now) {
       if (isSafe(p.x, p.z)) return;
@@ -186,15 +251,21 @@ export function createGame({ store, maxPlayers = 500, log = console }) {
     hp(p, m, now) {
       const t = online.get(m.id);
       const w = attackWindow(p, m.k, now);
-      if (!t || t === p || !w || p.dead || t.dead || w.hits.has(`p${t.id}`)) return;
+      if (!t || t === p || !w || p.dead || t.dead) return;
       const st = STYLES[w.style];
-      const reach = (m.k === 's' ? st.skillRange : st.range) + 2.5;
-      if (dist(p, t) > reach) return;
       const sameMatch = p.match && p.match === t.match && p.match.state === 'fight';
       if (!sameMatch && (p.match || t.match || isSafe(p.x, p.z) || isSafe(t.x, t.z))) return;
-      w.hits.add(`p${t.id}`);
-      const crit = Math.random() < CRIT.chance;
-      const mult = m.k === 's' ? st.skillMult : m.k === 'f' ? FINISHER : 1;
+      if (m.k === 'p') { if (!powerReaches(w, t)) return; }
+      else {
+        const reach = (m.k === 's' ? st.skillRange : st.range) + 2.5;
+        if (dist(p, t) > reach) return;
+        // Melee skill is a 360° slam; the sword dash is checked from where it started, along its line.
+        const cone = m.k === 's' ? (w.style === 'melee' ? null : 0.35) : st.arc / 2;
+        if (cone != null && !inCone(m.k === 's' ? w.x : p.x, m.k === 's' ? w.z : p.z, w.r, t, cone)) return;
+      }
+      if (!takeHit(w, `p${t.id}`)) return;
+      const crit = Math.random() < critFor(p.prog);
+      const mult = m.k === 'p' ? w.mv.mult : m.k === 's' ? st.skillMult : m.k === 'f' ? FINISHER : 1;
       const dmg = dmgFor(p.prog, w.style, mult) * rnd(0.9, 1.1) * (crit ? CRIT.mult : 1) * (1 - defReduceFor(t.prog));
       const kx = Math.max(-15, Math.min(15, n(m.kx) || 0)), kz = Math.max(-15, Math.min(15, n(m.kz) || 0));
       const fx = { t: 'pvp', from: p.id, to: t.id, dmg: Math.round(dmg), crit, kx, kz };
@@ -210,37 +281,93 @@ export function createGame({ store, maxPlayers = 500, log = console }) {
     },
     pot(p, m, now) {
       if (p.dead || p.match || now - p.potAt < POTION_CD * 1000) return;
-      const pt = POTIONS.find(x => x.id === m.id && p.prog.potions[x.id] > 0) || POTIONS.find(x => p.prog.potions[x.id] > 0);
-      if (!pt) return;
-      p.potAt = now; p.prog.potions[pt.id]--;
-      p.hp = Math.min(maxHpFor(p.prog), p.hp + maxHpFor(p.prog) * pt.heal);
+      const inv = p.prog.inv;
+      const id = m.id === 'pot_l' && inv.pot_l > 0 ? 'pot_l' : inv.pot_s > 0 ? 'pot_s' : inv.pot_l > 0 ? 'pot_l' : null;
+      if (!id) return;
+      p.potAt = now; takeItem(p, id, 1);
+      p.hp = Math.min(maxHpFor(p.prog), p.hp + maxHpFor(p.prog) * ITEMS[id].heal);
       markProg(p);
+    },
+    // A special power move: m = move index, r = facing when cast.
+    pw(p, m, now) {
+      const pw = p.prog.power, i = m.m;
+      if (p.dead || !pw || p.prog.style !== 'power' || !Number.isInteger(i) || i < 0 || i > 2) return;
+      if (pw.lv < POWER_UNLOCK[i] || now < p.nextPw[i] - 150) return;
+      if (p.match && p.match.state !== 'fight') return;
+      const mv = POWER_BY_ID[pw.id].moves[i];
+      p.nextPw[i] = now + mv.cd * 1000;
+      p.pcast = { at: now, style: 'power', mv, hits: new Map(), r: aimOf(p, m), x: p.x, z: p.z };
+      if (mv.k === 'dash' || mv.k === 'leap') { p.boostUntil = now + 1200; p.boost = mv.range + 2; }
+      if (mv.heal && !p.match) p.hp = Math.min(maxHpFor(p.prog), p.hp + maxHpFor(p.prog) * mv.heal);
+      gainXp(p, 'power', 3);
+      relay(p, { t: 'fx', id: p.id, p: pw.id, m: i, r: p.pcast.r, x: p.x, z: p.z });
     },
     buy(p, m) {
-      const list = CATALOG[m.cat], i = m.i;
-      if (!list || !Number.isInteger(i) || !list[i] || p.dead) return;
-      const role = Object.keys(SHOPS).find(r => SHOPS[r].includes(m.cat));
-      if (!nearNpc(p, role)) { violation(p, 'shop-far'); return; }
-      const it = list[i];
-      if (m.cat === 'potion') {
-        const qty = Number.isInteger(m.qty) ? Math.max(1, Math.min(10, m.qty)) : 1;
-        if (p.prog.gold < it.price * qty || p.prog.potions[it.id] + qty > 99) return;
-        p.prog.gold -= it.price * qty; p.prog.potions[it.id] += qty;
-      } else {
-        if (p.prog.owned[m.cat].includes(i) || p.prog.gold < it.price) return;
-        p.prog.gold -= it.price; p.prog.owned[m.cat].push(i); p.prog.gear[m.cat] = i;
-        if (m.cat === 'armor') p.hp = Math.min(p.hp, maxHpFor(p.prog));
-      }
+      const it = typeof m.id === 'string' && ITEMS[m.id];
+      if (!it || !it.shop || p.dead) return;
+      if (!nearNpc(p, it.shop)) { violation(p, 'shop-far'); return; }
+      if (it.slot === 'power' && !shrineStock(Date.now()).ids.includes(it.power)) return;
+      const stack = it.slot === 'potion' || it.slot === 'power';
+      const qty = it.slot === 'potion' && Number.isInteger(m.qty) ? Math.max(1, Math.min(10, m.qty)) : 1;
+      if (!stack && p.prog.inv[it.id]) return;
+      const wallet = it.gems ? 'gems' : 'gold';
+      const cost = (it.gems || it.price || 0) * qty;
+      if (p.prog[wallet] < cost || (p.prog.inv[it.id] || 0) + qty > 99) return;
+      p.prog[wallet] -= cost; addItem(p, it.id, qty);
+      if (GEAR_SLOTS.includes(it.slot)) equip(p, it.slot, it.id);
       markProg(p);
-      send(p, { t: 'bought', cat: m.cat, i });
+      send(p, { t: 'bought', id: it.id, qty });
+    },
+    sell(p, m) {
+      const it = typeof m.id === 'string' && ITEMS[m.id];
+      if (!it || !it.sell || p.dead || !SELL_AT.some(r => nearNpc(p, r))) return;
+      const qty = Number.isInteger(m.qty) ? Math.max(1, Math.min(99, m.qty)) : 1;
+      const worn = p.prog.gear[it.slot] === it.id ? 1 : 0;
+      if ((p.prog.inv[it.id] || 0) - worn < qty) return;
+      takeItem(p, it.id, qty); p.prog.gold += it.sell * qty;
+      markProg(p);
+      send(p, { t: 'sold', id: it.id, qty, g: it.sell * qty });
     },
     eq(p, m) {
-      if (!['sword', 'glove', 'armor'].includes(m.cat) || !p.prog.owned[m.cat].includes(m.i) || p.match) return;
-      p.prog.gear[m.cat] = m.i;
-      p.hp = Math.min(p.hp, maxHpFor(p.prog));
+      if (p.match || !GEAR_SLOTS.includes(m.slot)) return;
+      if (m.id === null) { if (m.slot !== 'sword' && m.slot !== 'shirt') equip(p, m.slot, null); }
+      else if (ITEMS[m.id]?.slot === m.slot && p.prog.inv[m.id] > 0) equip(p, m.slot, m.id);
       markProg(p);
     },
-    style(p, m) { if (m.s === 'melee' || m.s === 'sword') { p.prog.style = m.s; markProg(p); } },
+    // Using a power item grants the power; only when the player has none.
+    use(p, m) {
+      const it = typeof m.id === 'string' && ITEMS[m.id];
+      if (!it || it.slot !== 'power' || p.dead || p.match || p.prog.power || !(p.prog.inv[it.id] > 0)) return;
+      takeItem(p, it.id, 1);
+      p.prog.power = { id: it.power, lv: 1, xp: 0 };
+      p.prog.style = 'power'; p.nextPw = [0, 0, 0];
+      markProg(p); p.lookVer++;
+      send(p, { t: 'power', id: it.power });
+    },
+    purge(p) {
+      if (!p.prog.power || p.dead || p.match || !nearNpc(p, 'purge') || p.prog.gold < PURGE_COST) return;
+      p.prog.gold -= PURGE_COST; p.prog.power = null;
+      if (p.prog.style === 'power') p.prog.style = 'melee';
+      markProg(p); p.lookVer++;
+      send(p, { t: 'purged' });
+    },
+    // Kill quests: accept, hand in and drop, only while standing at the quest's board.
+    qaccept(p, m) {
+      const q = QUEST_BY_ID[m.id];
+      if (!q || p.dead || !nearBoard(p, q.board) || q.id in p.prog.quests || Object.keys(p.prog.quests).length >= QUEST_MAX) return;
+      p.prog.quests[q.id] = 0; markProg(p);
+    },
+    qclaim(p, m) {
+      const q = QUEST_BY_ID[m.id];
+      if (!q || p.dead || !nearBoard(p, q.board) || !(p.prog.quests[q.id] >= q.count)) return;
+      delete p.prog.quests[q.id];
+      p.prog.gold += q.gold; p.prog.gems += q.gems;
+      gainXp(p, p.prog.style, q.xp);
+      markProg(p);
+      send(p, { t: 'qdone', id: q.id });
+    },
+    qdrop(p, m) { if (m.id in p.prog.quests) { delete p.prog.quests[m.id]; markProg(p); } },
+    style(p, m) { if (['melee', 'sword', 'power'].includes(m.s) && styleOk(p.prog, m.s)) { p.prog.style = m.s; markProg(p); p.lookVer++; } },
     cp(p, m) {
       const c = CHECKPOINTS.find(x => x.id === m.id);
       if (!c || p.dead || Math.hypot(p.x - c.x, p.z - c.z) > 5) return;
@@ -252,7 +379,7 @@ export function createGame({ store, maxPlayers = 500, log = console }) {
       if (!p.dead || p.match || now - p.deadAt < 2800) return;
       const c = CHECKPOINTS.find(x => x.id === p.prog.checkpoint);
       p.dead = false; p.hp = maxHpFor(p.prog); p.enemies.forEach(r => { r.dmg = 0; });
-      teleport(p, c.x, c.z);
+      teleport(p, c.x, c.z + SPAWN_OFF);
     },
     queue(p) {
       if (p.match || p.queued || p.dead || !nearNpc(p, 'arena')) return;
@@ -304,7 +431,8 @@ export function createGame({ store, maxPlayers = 500, log = console }) {
       const wins = u.wins + (score === 1 ? 1 : 0), losses = u.losses + (score === 0 ? 1 : 0);
       store.q.setArena.run(rating, wins, losses, u.id);
       const reward = score === 1 ? 150 : score === 0.5 ? 60 : 30;
-      p.prog.gold += reward; markProg(p);
+      p.prog.gold += reward; if (score === 1) p.prog.gems += 2;
+      markProg(p);
       send(p, { t: 'mend', result: score === 1 ? 'win' : score === 0 ? 'lose' : 'draw', reason, delta, rating, wins, losses, reward });
       setTimeout(() => {
         p.match = null;
@@ -335,18 +463,27 @@ export function createGame({ store, maxPlayers = 500, log = console }) {
     for (const p of online.values()) {
       if (p.ws.readyState !== 1 || p.ws.bufferedAmount > 256 * 1024) continue;
       const cx = Math.floor(p.x / CELL), cz = Math.floor(p.z / CELL);
-      const ps = [];
+      const ps = [], seen = new Set();
       for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
         for (const o of grid.get(`${cx + i},${cz + j}`) || []) {
           if (o === p || Math.abs(o.x - p.x) > VIEW || Math.abs(o.z - p.z) > VIEW) continue;
           const mh = o.match ? o.match.max[o.id] : maxHpFor(o.prog);
           const hp = o.match ? o.match.hp[o.id] : o.hp;
-          const e = [o.id, Math.round(o.x * 100) / 100, Math.round(o.z * 100) / 100, Math.round(o.r * 100) / 100, o.a, o.prog.style === 'sword' ? 1 : 0,
-            o.prog.gear.sword, o.prog.gear.glove, o.prog.gear.armor, Math.round((hp / mh) * 100)];
-          if (!p.known.has(o.id)) { e.push(o.name); p.known.add(o.id); }
+          // [id, x, z, r, anim, hp%, look | 0, name?]: look and name only when this viewer lacks them
+          // (first time in view, or after leaving and coming back, when the client has dropped them).
+          const e = [o.id, Math.round(o.x * 100) / 100, Math.round(o.z * 100) / 100, Math.round(o.r * 100) / 100, o.a, Math.round((hp / mh) * 100)];
+          const fresh = !p.known.has(o.id);
+          if (fresh || p.seenLook.get(o.id) !== o.lookVer) {
+            const g = o.prog.gear;
+            e.push([o.prog.style, g.sword, g.glove, g.shirt, g.hat, g.acc, o.prog.power?.id].map(v => v || '').join('|'));
+            p.seenLook.set(o.id, o.lookVer);
+          } else e.push(0);
+          if (fresh) e.push(o.name);
+          seen.add(o.id);
           ps.push(e);
         }
       }
+      p.known = seen;
       const mh = p.match ? p.match.max[p.id] : maxHpFor(p.prog);
       const msg = { t: 's', me: [Math.round(p.match ? p.match.hp[p.id] : p.hp), mh, p.dead ? 1 : 0], ps };
       if (p.match) msg.m = p.match.hp;
@@ -369,7 +506,7 @@ export function createGame({ store, maxPlayers = 500, log = console }) {
     rename(id, name) {
       const p = online.get(id);
       if (p) p.name = name;
-      for (const o of online.values()) o.known.delete(id);
+      for (const o of online.values()) { o.known.delete(id); o.seenLook.delete(id); }
     },
     shutdown() {
       clearInterval(loop); clearInterval(saver); clearInterval(heart);

@@ -83,7 +83,7 @@ const auth = (req, res, next) => {
   if (!u) return res.status(401).json({ error: 'unauthorized' });
   req.user = u; next();
 };
-const publicUser = (u) => ({ id: u.id, name: u.name, rating: u.rating, wins: u.wins, losses: u.losses });
+const publicUser = (u) => ({ id: u.id, name: u.name, rating: u.rating, wins: u.wins, losses: u.losses, needsName: !u.named });
 
 app.get('/api/config', (req, res) => res.json({ googleClientId: CLIENT_ID, devLogin: DEV_LOGIN }));
 app.get('/api/health', (req, res) => res.json({ ok: true, online: game.size, max: MAX_PLAYERS }));
@@ -98,7 +98,9 @@ app.post('/api/auth/google', authLimit, async (req, res) => {
     if (!p?.sub || p.email_verified === false) throw new Error('unverified');
     const u = store.findOrCreateUser(`google:${p.sub}`, p.email);
     if (u.banned) return res.status(403).json({ error: 'Tài khoản đã bị khóa' });
-    res.json({ token: store.createSession(u.id), user: publicUser(u) });
+    // A name to offer on the naming screen: the Google first name, if it is a valid game name.
+    const given = cleanName(p.given_name || p.name || '').slice(0, 16);
+    res.json({ token: store.createSession(u.id), user: publicUser(u), suggest: NAME_RE.test(given) ? given : '' });
   } catch {
     res.status(401).json({ error: 'Đăng nhập Google không hợp lệ' });
   }
@@ -116,7 +118,7 @@ app.post('/api/me/name', limiter(10, 60000), auth, (req, res) => {
   if (!NAME_RE.test(name)) return res.status(400).json({ error: 'Tên 2–16 ký tự, chỉ gồm chữ, số, khoảng trắng' });
   const taken = store.q.userByName.get(name);
   if (taken && taken.id !== req.user.id) return res.status(409).json({ error: 'Tên đã có người dùng' });
-  store.q.setName.run(name, req.user.id);
+  store.q.setChosenName.run(name, req.user.id);
   game.rename(req.user.id, name);
   res.json({ user: publicUser(store.q.userById.get(req.user.id)) });
 });
@@ -148,7 +150,7 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`Mastery Land: http://localhost:${PORT}`);
+  console.log(`Arenix: http://localhost:${PORT}`);
   if (!CLIENT_ID) console.log('GOOGLE_CLIENT_ID chưa đặt — đăng nhập Google đang tắt.');
   if (DEV_LOGIN) console.log('DEV_LOGIN=1 — đăng nhập thử đang bật, KHÔNG dùng khi chạy thật.');
 });

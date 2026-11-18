@@ -1,0 +1,2 @@
+# Arenix: deploy new commits on main (see deploy/pull-deploy.sh).
+* * * * * root /bin/bash /opt/arenix/repo/deploy/pull-deploy.sh

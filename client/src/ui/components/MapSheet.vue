@@ -9,6 +9,6 @@ onMounted(() => game.drawBigMap(canvas.value));
 
 <template>
   <div id="mapModal" class="modal" @click="closeModal()">
-    <canvas id="bigmap" ref="canvas" width="720" height="720"></canvas>
+    <div class="bigmap frame"><canvas id="bigmap" ref="canvas" width="720" height="720"></canvas></div>
   </div>
 </template>

@@ -5,7 +5,7 @@ import { ui, game } from '../state.js';
 <template>
   <div id="zone" :class="{ show: ui.zone.show }">{{ ui.zone.text }}</div>
   <div id="toasts"><div v-for="t in ui.toasts" :key="t.id" class="toast">{{ t.text }}</div></div>
-  <div v-if="ui.queue.on" id="queueChip" class="pill">
+  <div v-if="ui.queue.on" id="queueChip" class="pill frame">
     <span class="ms spin">progress_activity</span><b>{{ ui.queue.time }}</b>
     <button aria-label="Hủy" @click="game.toggleQueue()"><span class="ms">close</span></button>
   </div>

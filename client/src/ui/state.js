@@ -12,18 +12,21 @@ import { reactive } from 'vue';
  */
 export const ui = reactive({
   booted: false,
-  loading: { progress: 0, auth: false, error: '', devLogin: false },
+  loading: { progress: 0, auth: false, error: '', devLogin: false, google: false, naming: false, name: '' },
   online: true,
   hud: {
-    hp: 1, mhp: 1, xp: 0,
-    atkIcon: 'sports_mma', skillIcon: 'explosion', skillLocked: true, skillCd: 0, skillCdK: 0,
+    hp: 1, mhp: 1, xp: 0, lv: 1,
+    atkIcon: 'sports_mma',
+    /** One entry per skill button: { icon, color, lock (level needed, 0 if open), cd (seconds), k (cooldown 0..1) }. */
+    skills: [],
     potions: 0, potCdK: 0, potHidden: true, safe: false, actIcon: null,
   },
   me: { id: 0, name: '', rating: 1000, wins: 0, losses: 0 },
   /** A copy of the player's progress for the stats and shop sheets, refreshed when it changes. */
   prog: null,
-  modal: null, // 'stats' | 'shop' | 'arena' | 'map' | 'kicked'
+  modal: null, // 'stats' | 'bag' | 'shop' | 'purge' | 'quest' | 'arena' | 'map' | 'kicked'
   shop: { role: 'weapon', tab: 'sword' },
+  quest: { board: 'village' },
   queue: { on: false, time: '0:00' },
   arena: { show: false, opp: '', oppHp: 100, time: '1:30' },
   dead: false,
@@ -35,8 +38,9 @@ export const ui = reactive({
 export const input = { joyX: 0, joyY: 0, atkHeld: false };
 
 export const game = {
-  attack() {}, skill() {}, swap() {}, potion() {}, interact() {},
-  buy(cat, i) {}, equip(cat, i) {}, toggleQueue() {}, rename: async (name) => {}, logout() {},
+  attack() {}, skill(i) {}, swap() {}, potion() {}, interact() {},
+  buy(id, qty) {}, sell(id, qty) {}, equip(slot, id) {}, use(id) {}, purge() {}, quest(kind, id) {},
+  toggleQueue() {}, rename: async (name) => {}, logout() {},
   drawBigMap(canvas) {},
 };
 
