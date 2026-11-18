@@ -9,6 +9,8 @@ LOG=/var/log/arenix-deploy.log
 exec 9>/run/arenix-deploy.lock
 flock -n 9 || exit 0
 cd "$REPO"
+# After a reboot Docker starts the game again but the firewall rules are gone: restore them.
+iptables -C DOCKER-USER -p tcp -m conntrack --ctorigdstport 8443 --ctstate NEW -j ARENIX-8443 2>/dev/null || bash deploy/firewall.sh
 git fetch -q origin main
 NEW=$(git rev-parse origin/main)
 OLD=$(cat /opt/arenix/DEPLOYED 2>/dev/null || true)
