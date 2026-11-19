@@ -25,10 +25,6 @@ docker build -t arenix:latest .
 docker rm -f arenix >/dev/null 2>&1 || true
 docker run -d --name arenix --hostname arenix --restart unless-stopped   --network "$NET" --env-file /opt/arenix/.env   -v arenix_data:/app/data --memory 1g arenix:latest >/dev/null
 
-# TEMPORARY, while arenix.fun's DNS moves to Cloudflare: the old route through the other site's
-# proxy still needs to reach the game. Gone once /opt/nginx-extra/arenix.conf is removed.
-if [ -f /opt/nginx-extra/arenix.conf ]; then docker network connect flath_flath-network arenix 2>/dev/null || true; fi
-
 for i in $(seq 1 30); do
   if docker exec arenix node -e "fetch('http://127.0.0.1:3000/api/config').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
     echo "game up"; break
