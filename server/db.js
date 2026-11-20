@@ -2,7 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
-import { defaultProgress, MAX_LV, CHECKPOINTS, ITEMS, GEAR_SLOTS, POWER_BY_ID, QUEST_BY_ID, QUEST_MAX } from '../shared/rules.js';
+import { defaultProgress, MAX_LV, MASTERY_MAX, STAT_KEYS, POINTS_PER_LV, cleanAvatar, CHECKPOINTS, ITEMS, GEAR_SLOTS, POWER_BY_ID, QUEST_BY_ID, QUEST_MAX } from '../shared/rules.js';
 
 export function openDb(root) {
   fs.mkdirSync(path.join(root, 'data'), { recursive: true });
@@ -103,10 +103,20 @@ const OLD_GEAR = {
 function repairProgress(raw) {
   const d = defaultProgress();
   const p = raw && typeof raw === 'object' ? raw : {};
-  for (const k of ['melee', 'sword', 'defense']) {
+  for (const k of ['melee', 'sword']) {
     const m = p.mastery?.[k] || {};
-    d.mastery[k] = { lv: Math.floor(num(m.lv, 1, MAX_LV, 1)), xp: num(m.xp, 0, 1e9, 0) };
+    d.mastery[k] = { lv: Math.floor(num(m.lv, 1, MASTERY_MAX, 1)), xp: num(m.xp, 0, 1e9, 0) };
   }
+  if (Number.isFinite(p.level)) {
+    d.level = Math.floor(num(p.level, 1, MAX_LV, 1)); d.xp = num(p.xp, 0, 1e12, 0);
+    let budget = POINTS_PER_LV * (d.level - 1);
+    for (const k of STAT_KEYS) { d.stats[k] = Math.min(budget, Math.floor(num(p.stats?.[k], 0, MAX_LV, 0))); budget -= d.stats[k]; }
+  } else {
+    // Save from before levels: the old per-style mastery becomes a character level, points unspent.
+    const best = Math.max(1, ...['melee', 'sword', 'defense'].map(k => num(p.mastery?.[k]?.lv, 1, 300, 1)), num(p.power?.lv, 1, 300, 1));
+    d.level = Math.max(1, Math.min(MAX_LV, Math.floor(best * 0.6)));
+  }
+  d.avatar = cleanAvatar(p.avatar);
   d.gold = Math.floor(num(p.gold, 0, 1e12, 0));
   d.gems = Math.floor(num(p.gems, 0, 1e9, 0));
   if (p.inv && typeof p.inv === 'object') {
@@ -127,7 +137,7 @@ function repairProgress(raw) {
   }
   for (const [id, c] of Object.entries(d.inv)) if (!c) delete d.inv[id];
   const pw = p.power;
-  d.power = pw && POWER_BY_ID[pw.id] ? { id: pw.id, lv: Math.floor(num(pw.lv, 1, MAX_LV, 1)), xp: num(pw.xp, 0, 1e9, 0) } : null;
+  d.power = pw && POWER_BY_ID[pw.id] ? { id: pw.id, lv: Math.floor(num(pw.lv, 1, MASTERY_MAX, 1)), xp: num(pw.xp, 0, 1e9, 0) } : null;
   d.style = p.style === 'sword' ? 'sword' : p.style === 'power' && d.power ? 'power' : 'melee';
   for (const [id, n] of Object.entries(p.quests || {})) {
     if (QUEST_BY_ID[id] && Object.keys(d.quests).length < QUEST_MAX) d.quests[id] = Math.floor(num(n, 0, QUEST_BY_ID[id].count, 0));

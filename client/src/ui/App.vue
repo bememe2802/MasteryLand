@@ -13,6 +13,7 @@ import BagSheet from './components/BagSheet.vue';
 import PurgeSheet from './components/PurgeSheet.vue';
 import QuestSheet from './components/QuestSheet.vue';
 import QuestTracker from './components/QuestTracker.vue';
+import CreatorPanel from './components/CreatorPanel.vue';
 import { autoFullscreenOnFirstTap } from './fullscreen.js';
 
 autoFullscreenOnFirstTap();
@@ -21,11 +22,14 @@ const reload = () => location.reload();
 </script>
 
 <template>
-  <TopBar />
-  <QuestTracker />
+  <template v-if="!ui.creator.show">
+    <TopBar />
+    <QuestTracker />
+    <Joystick />
+    <ActionButtons />
+  </template>
   <Notices />
-  <Joystick />
-  <ActionButtons />
+  <CreatorPanel v-if="ui.creator.show && ui.creator.a" />
   <StatsSheet v-if="ui.modal === 'stats' && ui.prog" />
   <ShopSheet v-if="ui.modal === 'shop' && ui.prog" />
   <BagSheet v-if="ui.modal === 'bag' && ui.prog" />

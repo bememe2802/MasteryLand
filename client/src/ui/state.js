@@ -13,9 +13,13 @@ import { reactive } from 'vue';
 export const ui = reactive({
   booted: false,
   loading: { progress: 0, auth: false, error: '', devLogin: false, google: false, naming: false, name: '' },
+  /** Character creator: open, first time (new player), and the looks being edited. */
+  creator: { show: false, first: false, a: null, face: false },
+  /** A move button is being dragged to aim; cancel = the finger is over the cancel button. */
+  aim: { on: false, cancel: false, aim: 'dir' },
   online: true,
   hud: {
-    hp: 1, mhp: 1, xp: 0, lv: 1,
+    hp: 1, mhp: 1, xp: 0, lv: 1, points: 0,
     atkIcon: 'sports_mma',
     /** One entry per skill button: { icon, color, lock (level needed, 0 if open), cd (seconds), k (cooldown 0..1) }. */
     skills: [],
@@ -38,7 +42,8 @@ export const ui = reactive({
 export const input = { joyX: 0, joyY: 0, atkHeld: false };
 
 export const game = {
-  attack() {}, skill(i) {}, swap() {}, potion() {}, interact() {},
+  attack() {}, skill(i) {}, aim(i, phase, dx, dy, k, cancel) { return false; }, stat(k, n) {}, statReset() {},
+  openCreator() {}, previewAvatar(a) {}, saveAvatar(a) {}, swap() {}, potion() {}, interact() {},
   buy(id, qty) {}, sell(id, qty) {}, equip(slot, id) {}, use(id) {}, purge() {}, quest(kind, id) {},
   toggleQueue() {}, rename: async (name) => {}, logout() {},
   drawBigMap(canvas) {},

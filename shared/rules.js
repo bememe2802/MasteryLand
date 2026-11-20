@@ -127,7 +127,6 @@ Object.assign(ENEMIES, {
   darkknight: mob('Hiệp Sĩ Hắc Ám', 105, { range: 2.3 }),
   demon: mob('Ma Vương', 150, { boss: true, range: 4.5 }),
 });
-for (const t of Object.values(ENEMIES)) t.windup = t.boss ? 0.9 : t.lv >= 30 ? 0.65 : 0.45;
 export const ENEMY_LIST = CAMPS.flatMap((c, ci) => Array.from({ length: c.n }, () => ({ camp: ci, type: c.type }))).map((e, id) => ({ ...e, id }));
 
 export const PATHS = [
@@ -226,15 +225,38 @@ export const ARENA = { r: 13, slots: 16, center: (slot) => ({ x: -210 + (slot % 
 export const inArena = (x, z) => z > 900;
 
 export const STYLES = {
-  melee: { name: 'Võ Thuật', base: 6, cd: 0.32, range: 2.4, arc: 1.3, skill: 'Chấn Địa Quyền', skillCd: 6, skillMult: 4, skillRange: 4.6 },
-  sword: { name: 'Kiếm Thuật', base: 10, cd: 0.46, range: 3.2, arc: 1.7, skill: 'Phong Trảm', skillCd: 7, skillMult: 5, skillRange: 9 },
-  // Basic attack while a power is equipped: an elemental punch. Its three moves live on the power itself.
+  melee: { name: 'Võ Thuật', base: 6, cd: 0.32, range: 2.4, arc: 1.3 },
+  sword: { name: 'Kiếm Thuật', base: 10, cd: 0.46, range: 3.2, arc: 1.7 },
+  // Basic attack while a power is equipped: an elemental punch. Its moves live on the power itself.
   power: { name: 'Sức Mạnh', base: 8, cd: 0.38, range: 2.8, arc: 1.4 },
 };
 export const FINISHER = 1.6;
 export const CRIT = { chance: 0.12, mult: 1.7 };
-export const SKILL_UNLOCK = 10;
-export const MAX_LV = 300;
+
+/* ---- Level and stat points (like Blox Fruits) -------------------------------------------------
+ * One character level, earned from monsters and quests. Every level gives 3 points to spend on
+ * Melee, Defense, Sword or Power; a stat cannot go past MAX_LV. Mastery is separate: it grows by
+ * using a fighting style and opens that style's moves.
+ */
+export const MAX_LV = 400;
+export const POINTS_PER_LV = 3;
+export const STAT_KEYS = ['melee', 'defense', 'sword', 'power'];
+export const STAT_INFO = {
+  melee: { name: 'Võ Thuật', icon: 'sports_mma', desc: 'Sát thương tay không' },
+  defense: { name: 'Phòng Thủ', icon: 'shield', desc: 'Máu tối đa và giảm sát thương' },
+  sword: { name: 'Kiếm Thuật', icon: 'swords', desc: 'Sát thương kiếm' },
+  power: { name: 'Sức Mạnh', icon: 'auto_awesome', desc: 'Sát thương ấn sức mạnh' },
+};
+export const MASTERY_MAX = 300;
+export const xpNeed = (lv) => Math.floor(50 * lv ** 1.7 + 50);
+export const masteryNeed = (lv) => Math.floor(12 + lv * 5 + lv * lv * 0.35);
+/** Experience for a kill; monsters far below the player's level give little. */
+export function killXp(t, lv) {
+  const base = Math.round(t.lv * t.lv * 0.9 + t.lv * 12 + 15) * (t.boss ? 5 : 1);
+  const gap = lv - t.lv - 12;
+  return Math.max(1, Math.round(base * (gap > 0 ? Math.max(0.08, 1 - gap * 0.06) : 1)));
+}
+export const resetCost = (lv) => 200 + lv * 60;
 
 /* ---- Items ------------------------------------------------------------------------------------
  * Every item lives in ITEMS under a string id. `slot` says where it goes:
@@ -287,7 +309,7 @@ add('glove', 'weapon', [
   ['gl_titan', 'Găng Titan', 'legend', '35', 0x5fd8ff, { mult: 3.8, crit: 0.06 }, { emissive: 0x0a4a6a, metal: true }],
 ]);
 add('shirt', 'armor', [
-  ['sh_tee', 'Áo Thun Trắng', 'common', 0, 0xf4f4f0, { hp: 0, red: 0 }],
+  ['sh_tee', 'Áo Vải Phiêu Lưu', 'common', 0, 0x9fcfb8, { hp: 0, red: 0 }],
   ['sh_sailor', 'Áo Thủy Thủ', 'common', 300, 0x3a6ec8, { hp: 50, red: 0.04 }],
   ['sh_leather', 'Áo Giáp Da', 'common', 700, 0xa8743f, { hp: 90, red: 0.06 }],
   ['sh_chain', 'Giáp Xích', 'rare', 1500, 0xb9c4d0, { hp: 150, red: 0.1 }, { metal: true }],
@@ -327,30 +349,50 @@ add('material', null, [
   ['mt_ember', 'Than Hồng', 'epic', 0, 0xff6a2a, {}, { sell: 280 }],
 ]);
 
-/* ---- Special powers ---------------------------------------------------------------------------
- * 20 powers, each an item ("Ấn") bought at the shrine and used from the bag. One power at a time;
- * removing it costs gold at the village sage. Each has three moves, unlocked by power mastery.
+/* ---- Moves and special powers -----------------------------------------------------------------
+ * Fists and sword have two moves each; a power ("Ấn") has 2 to 4, more the rarer it is. Moves open
+ * with the mastery of their style. One power at a time; the village sage removes it for gold.
  *
- * A move's `k` (kind) decides its shape; every kind fires along the player's facing:
- *   bolt  projectile(s): range, speed, r (radius), count, spread, pierce
- *   cone  instant fan in front: range, arc
- *   line  instant beam: range, w (half width)
- *   nova  burst around the player: radius
- *   dash  rush forward hitting along the path: range, w
- *   leap  jump forward, slam on landing: range, radius
- *   zone  field placed ahead that ticks: dist, radius, ticks, every
- * `fx` adds an effect on enemies hit: burn, slow, stun, pull, knock; `heal` heals the caster (share of max HP).
+ * A move's `k` (kind) decides its shape and how it is aimed (drag the button, like a MOBA):
+ *   aimed at a direction:
+ *     bolt    projectile(s): range, speed, r (radius), count, spread, pierce
+ *     cone    instant fan: range, arc
+ *     line    instant beam: range, w (half width)
+ *     dash    rush, hitting along the path: range, w
+ *     chain   lightning that jumps between targets: range, jumps
+ *   aimed at a spot (up to `range` away):
+ *     leap    jump there, slam on landing: range, radius
+ *     blink   vanish and reappear there in a burst: range, radius
+ *     zone    field that ticks: range, radius, ticks, every
+ *     meteor  falls from the sky after `delay`: range, radius, delay
+ *   on the caster:
+ *     nova    burst around the player: radius
+ *     aura    ring that follows the player and ticks: radius, ticks, every
+ *     shield  takes less damage (`red`) for `dur` seconds, bursts once: radius
+ * `fx` adds an effect on what is hit: burn, slow, stun, pull, knock; `heal` heals the caster (share
+ * of max HP); `vis` picks a look (crescent, spikes, vortex, rain, wave, beam, lightning).
  */
-export const POWER_UNLOCK = [1, 12, 30];
+export const POWER_UNLOCK = [1, 10, 30, 60];
+export const STYLE_UNLOCK = [5, 25];
+export const CHAIN_HOP = 5;
 const RAR_MULT = { common: 1, rare: 1.15, epic: 1.3, legend: 1.5 };
 const POWER_PRICE = { common: 2500, rare: 8000, epic: 20000, legend: '50' };
 const P = (id, name, rarity, color, icon, desc, moves) => ({ id, name, rarity, color, icon, desc, moves });
 const M = (n, icon, k, cd, mult, o = {}) => ({ n, icon, k, cd, mult, ...o });
+export const STYLE_MOVES = {
+  melee: [
+    M('Chấn Địa Quyền', 'explosion', 'nova', 6, 4, { radius: 4.6, fx: 'knock' }),
+    M('Liên Hoàn Cước', 'sprint', 'dash', 9, 5, { range: 8, w: 1.6, fx: 'knock' }),
+  ],
+  sword: [
+    M('Phong Trảm', 'cyclone', 'dash', 7, 5, { range: 9, w: 1.6 }),
+    M('Kiếm Khí', 'air', 'bolt', 10, 5.5, { range: 14, speed: 26, r: 1.2, pierce: true, vis: 'crescent' }),
+  ],
+};
 export const POWERS = [
   P('bubble', 'Ấn Bọt Nước', 'common', 0x8fe3ff, 'bubble_chart', 'Thổi bong bóng làm chậm kẻ địch', [
     M('Bóng Bay', 'bubble_chart', 'bolt', 4, 2.6, { range: 12, speed: 14, r: 0.8, count: 3, spread: 0.25, fx: 'slow' }),
-    M('Màn Bọt', 'blur_on', 'zone', 9, 1, { dist: 5, radius: 3.5, ticks: 5, every: 0.5, fx: 'slow' }),
-    M('Bong Bóng Khổng Lồ', 'radio_button_unchecked', 'bolt', 14, 7, { range: 14, speed: 9, r: 2, pierce: true, fx: 'stun' }),
+    M('Bong Bóng Khổng Lồ', 'radio_button_unchecked', 'bolt', 12, 6.5, { range: 14, speed: 9, r: 2, pierce: true, fx: 'stun' }),
   ]),
   P('spring', 'Ấn Lò Xo', 'common', 0xc8e86a, 'height', 'Nảy bật, lao tới cực nhanh', [
     M('Đấm Bật', 'sports_mma', 'line', 4, 3, { range: 6, w: 1.1, fx: 'knock' }),
@@ -359,114 +401,128 @@ export const POWERS = [
   ]),
   P('leaf', 'Ấn Lá Rừng', 'common', 0x6fd05a, 'eco', 'Lá cây sắc như dao, hồi máu nhẹ', [
     M('Phi Diệp', 'eco', 'bolt', 3.5, 2.4, { range: 13, speed: 24, r: 0.5, count: 5, spread: 0.18 }),
-    M('Rễ Trói', 'grass', 'zone', 10, 0.9, { dist: 6, radius: 3, ticks: 4, every: 0.5, fx: 'stun' }),
+    M('Rễ Trói', 'grass', 'zone', 10, 0.9, { range: 8, radius: 3, ticks: 4, every: 0.5, fx: 'stun', vis: 'spikes' }),
     M('Rừng Hồi Sinh', 'forest', 'nova', 15, 5, { radius: 5.5, heal: 0.25 }),
   ]),
   P('sound', 'Ấn Âm Ba', 'common', 0xf0a0ff, 'graphic_eq', 'Sóng âm đánh xuyên qua hàng địch', [
     M('Tiếng Hét', 'campaign', 'cone', 4, 2.8, { range: 6, arc: 1.4, fx: 'knock' }),
-    M('Sóng Âm', 'graphic_eq', 'line', 8, 4, { range: 14, w: 1.5 }),
-    M('Chấn Âm', 'surround_sound', 'nova', 13, 6, { radius: 6, fx: 'stun' }),
+    M('Chấn Âm', 'surround_sound', 'aura', 12, 1.4, { radius: 5, ticks: 5, every: 0.4, fx: 'slow' }),
   ]),
   P('fire', 'Ấn Hỏa', 'rare', 0xff6a2a, 'local_fire_department', 'Lửa thiêu đốt kẻ địch theo thời gian', [
     M('Hỏa Cầu', 'local_fire_department', 'bolt', 4, 3, { range: 15, speed: 22, r: 0.9, fx: 'burn' }),
     M('Phun Lửa', 'whatshot', 'cone', 8, 4.6, { range: 7, arc: 1.2, fx: 'burn' }),
-    M('Cột Lửa', 'mode_heat', 'zone', 14, 1.6, { dist: 6, radius: 4, ticks: 6, every: 0.4, fx: 'burn' }),
+    M('Thiên Hỏa', 'mode_heat', 'meteor', 14, 9, { range: 12, radius: 4.5, delay: 0.8, fx: 'burn' }),
   ]),
   P('ice', 'Ấn Băng', 'rare', 0x8fd8ff, 'ac_unit', 'Đóng băng, làm chậm và choáng', [
     M('Mũi Băng', 'ac_unit', 'bolt', 4, 2.8, { range: 15, speed: 26, r: 0.6, count: 3, spread: 0.12, fx: 'slow' }),
-    M('Băng Địa', 'severe_cold', 'line', 9, 4.4, { range: 12, w: 1.6, fx: 'stun' }),
-    M('Kỷ Băng Hà', 'mode_cool', 'nova', 15, 7, { radius: 7, fx: 'stun' }),
+    M('Băng Địa', 'severe_cold', 'line', 9, 4.4, { range: 12, w: 1.6, fx: 'stun', vis: 'spikes' }),
+    M('Khiên Băng', 'shield', 'shield', 16, 3, { dur: 4, red: 0.5, radius: 4, fx: 'slow' }),
   ]),
   P('wind', 'Ấn Phong', 'rare', 0xbff0e0, 'air', 'Gió cắt và đẩy lùi kẻ địch', [
-    M('Phong Nhận', 'air', 'bolt', 3.5, 2.8, { range: 16, speed: 30, r: 0.8, pierce: true }),
-    M('Lốc Xoáy', 'cyclone', 'zone', 9, 1.1, { dist: 6, radius: 3.5, ticks: 6, every: 0.4, fx: 'pull' }),
-    M('Cuồng Phong', 'storm', 'dash', 13, 6.5, { range: 13, w: 2.2, fx: 'knock' }),
+    M('Phong Nhận', 'air', 'bolt', 3.5, 2.8, { range: 16, speed: 30, r: 0.8, pierce: true, vis: 'crescent' }),
+    M('Lốc Xoáy', 'cyclone', 'zone', 9, 1.1, { range: 9, radius: 3.5, ticks: 6, every: 0.4, fx: 'pull', vis: 'vortex' }),
+    M('Phong Bộ', 'storm', 'blink', 12, 5, { range: 11, radius: 3.5, fx: 'knock' }),
   ]),
   P('stone', 'Ấn Đá', 'rare', 0xb08a5a, 'landslide', 'Đá cứng, đòn nặng gây choáng', [
     M('Đá Lăn', 'landslide', 'bolt', 5, 3.4, { range: 13, speed: 16, r: 1.2, pierce: true, fx: 'knock' }),
-    M('Giáp Đá Dậm', 'terrain', 'nova', 9, 4.5, { radius: 4.5, fx: 'stun' }),
+    M('Giáp Đá', 'terrain', 'shield', 12, 3, { dur: 5, red: 0.6, radius: 4, fx: 'stun' }),
     M('Núi Đè', 'filter_hdr', 'leap', 14, 7.5, { range: 8, radius: 4.5, fx: 'stun' }),
   ]),
   P('water', 'Ấn Thủy', 'rare', 0x3aa0ff, 'water', 'Sóng nước cuốn trôi kẻ địch', [
     M('Đạn Nước', 'water_drop', 'bolt', 3.5, 2.6, { range: 14, speed: 24, r: 0.6, count: 4, spread: 0.1 }),
-    M('Sóng Thần', 'waves', 'line', 9, 4.6, { range: 13, w: 2.2, fx: 'knock' }),
-    M('Xoáy Nước', 'cyclone', 'zone', 14, 1.5, { dist: 5, radius: 4, ticks: 6, every: 0.45, fx: 'pull', heal: 0.15 }),
+    M('Sóng Thần', 'waves', 'line', 9, 4.6, { range: 13, w: 2.2, fx: 'knock', vis: 'wave' }),
+    M('Xoáy Nước', 'cyclone', 'zone', 14, 1.5, { range: 8, radius: 4, ticks: 6, every: 0.45, fx: 'pull', heal: 0.15, vis: 'vortex' }),
   ]),
   P('poison', 'Ấn Độc', 'rare', 0xa0e040, 'coronavirus', 'Độc ăn mòn, gây sát thương lâu dài', [
     M('Phi Độc', 'coronavirus', 'bolt', 3.5, 2.4, { range: 14, speed: 20, r: 0.7, count: 2, spread: 0.15, fx: 'burn' }),
-    M('Đầm Độc', 'science', 'zone', 9, 1.2, { dist: 5, radius: 4, ticks: 6, every: 0.5, fx: 'slow' }),
-    M('Rồng Độc', 'pest_control', 'line', 14, 6.5, { range: 14, w: 1.8, fx: 'burn' }),
+    M('Đầm Độc', 'science', 'zone', 9, 1.2, { range: 9, radius: 4, ticks: 6, every: 0.5, fx: 'slow' }),
+    M('Rồng Độc', 'pest_control', 'line', 14, 6.5, { range: 14, w: 1.8, fx: 'burn', vis: 'wave' }),
   ]),
   P('thunder', 'Ấn Lôi', 'epic', 0xffe24a, 'bolt', 'Sấm sét nhanh như chớp, gây choáng', [
-    M('Tia Chớp', 'bolt', 'line', 3.5, 3.4, { range: 15, w: 1, fx: 'stun' }),
-    M('Lôi Bộ', 'flash_on', 'dash', 8, 4.8, { range: 12, w: 1.6 }),
-    M('Thiên Lôi', 'thunderstorm', 'zone', 14, 2.2, { dist: 6, radius: 4.5, ticks: 5, every: 0.35, fx: 'stun' }),
+    M('Tia Chớp', 'bolt', 'chain', 3.5, 3.2, { range: 12, jumps: 3, fx: 'stun' }),
+    M('Lôi Bộ', 'flash_on', 'blink', 8, 4.5, { range: 12, radius: 3, fx: 'stun' }),
+    M('Lôi Giáp', 'electric_bolt', 'aura', 13, 1.6, { radius: 4.5, ticks: 6, every: 0.5, fx: 'slow' }),
+    M('Thiên Lôi', 'thunderstorm', 'zone', 16, 2.2, { range: 11, radius: 4.5, ticks: 5, every: 0.35, fx: 'stun', vis: 'lightning' }),
   ]),
   P('shadow', 'Ấn Bóng Tối', 'epic', 0x7a4ad8, 'dark_mode', 'Bóng tối kéo kẻ địch lại gần', [
     M('Hắc Cầu', 'dark_mode', 'bolt', 4, 3.2, { range: 15, speed: 18, r: 1, fx: 'pull' }),
     M('Bóng Lướt', 'blur_linear', 'dash', 8, 4.8, { range: 11, w: 1.8, fx: 'slow' }),
-    M('Hố Đen', 'radio_button_checked', 'zone', 15, 2, { dist: 6, radius: 5, ticks: 6, every: 0.4, fx: 'pull' }),
+    M('Ảnh Độn', 'visibility_off', 'blink', 11, 5, { range: 12, radius: 3, fx: 'slow' }),
+    M('Hố Đen', 'radio_button_checked', 'zone', 16, 2, { range: 10, radius: 5, ticks: 6, every: 0.4, fx: 'pull', vis: 'vortex' }),
   ]),
   P('light', 'Ấn Ánh Sáng', 'epic', 0xfff6c0, 'flare', 'Ánh sáng xuyên thấu với tốc độ cao', [
     M('Quang Tiễn', 'flare', 'bolt', 3, 2.6, { range: 18, speed: 40, r: 0.5, count: 3, spread: 0.08, pierce: true }),
     M('Quang Tốc', 'light_mode', 'dash', 7, 4.4, { range: 15, w: 1.4 }),
-    M('Thánh Quang', 'wb_sunny', 'line', 14, 8, { range: 18, w: 1.6, fx: 'stun' }),
+    M('Hào Quang', 'brightness_7', 'shield', 14, 2.5, { dur: 4, red: 0.4, heal: 0.15, radius: 4.5 }),
+    M('Thánh Quang', 'wb_sunny', 'line', 15, 8, { range: 18, w: 1.6, fx: 'stun', vis: 'beam' }),
   ]),
   P('crystal', 'Ấn Pha Lê', 'epic', 0xb8f0ff, 'diamond', 'Pha lê sắc nhọn, phòng thủ cao', [
     M('Mảnh Pha Lê', 'diamond', 'bolt', 3.5, 2.6, { range: 14, speed: 26, r: 0.5, count: 5, spread: 0.2 }),
-    M('Gai Pha Lê', 'change_history', 'line', 9, 5, { range: 11, w: 1.6, fx: 'stun' }),
-    M('Lăng Kính', 'hexagon', 'nova', 14, 7, { radius: 6, heal: 0.2 }),
+    M('Gai Pha Lê', 'change_history', 'line', 9, 5, { range: 11, w: 1.6, fx: 'stun', vis: 'spikes' }),
+    M('Lăng Kính', 'hexagon', 'shield', 14, 3, { dur: 5, red: 0.55, heal: 0.15, radius: 4 }),
+    M('Mưa Pha Lê', 'grain', 'meteor', 16, 9, { range: 12, radius: 5, delay: 0.7, fx: 'slow' }),
   ]),
   P('lava', 'Ấn Dung Nham', 'epic', 0xff4a1a, 'volcano', 'Dung nham nóng chảy, sát thương cực lớn', [
     M('Nắm Đấm Nham', 'sports_mma', 'bolt', 4.5, 3.8, { range: 13, speed: 18, r: 1.1, fx: 'burn' }),
     M('Phun Trào', 'volcano', 'nova', 9, 5.2, { radius: 5, fx: 'burn' }),
-    M('Mưa Dung Nham', 'local_fire_department', 'zone', 15, 2.4, { dist: 7, radius: 5, ticks: 6, every: 0.4, fx: 'burn' }),
+    M('Thiên Thạch Nham', 'local_fire_department', 'meteor', 13, 8, { range: 12, radius: 4.5, delay: 0.8, fx: 'burn' }),
+    M('Mưa Dung Nham', 'water_damage', 'zone', 16, 2.4, { range: 10, radius: 5, ticks: 6, every: 0.4, fx: 'burn', vis: 'rain' }),
   ]),
   P('blast', 'Ấn Bộc Phá', 'epic', 0xffa040, 'destruction', 'Mọi thứ chạm vào đều phát nổ', [
     M('Đạn Nổ', 'destruction', 'bolt', 4, 3.4, { range: 13, speed: 20, r: 0.9, fx: 'knock' }),
     M('Bước Nổ', 'local_fire_department', 'leap', 8, 4.8, { range: 9, radius: 4, fx: 'knock' }),
-    M('Đại Bộc Phá', 'brightness_7', 'nova', 15, 8, { radius: 7, fx: 'knock' }),
+    M('Chuỗi Nổ', 'flare', 'chain', 10, 4.5, { range: 12, jumps: 4, fx: 'knock' }),
+    M('Đại Bộc Phá', 'brightness_7', 'nova', 16, 9, { radius: 7, fx: 'knock' }),
   ]),
   P('gravity', 'Ấn Trọng Lực', 'legend', 0x9a7aff, 'public', 'Điều khiển trọng lực, đè bẹp kẻ địch', [
-    M('Trọng Áp', 'arrow_downward', 'zone', 5, 1.5, { dist: 6, radius: 3.5, ticks: 3, every: 0.3, fx: 'slow' }),
+    M('Trọng Áp', 'arrow_downward', 'zone', 5, 1.6, { range: 10, radius: 3.5, ticks: 3, every: 0.3, fx: 'slow' }),
     M('Lực Hút', 'public', 'nova', 9, 4.5, { radius: 8, fx: 'pull' }),
-    M('Thiên Thạch', 'nightlight', 'leap', 15, 10, { range: 10, radius: 6, fx: 'stun' }),
+    M('Dịch Chuyển Trọng Lực', 'move_down', 'blink', 11, 5.5, { range: 12, radius: 4, fx: 'stun' }),
+    M('Thiên Thạch', 'nightlight', 'meteor', 16, 12, { range: 13, radius: 6, delay: 1, fx: 'stun' }),
   ]),
   P('void', 'Ấn Hư Không', 'legend', 0x5ad8ff, 'all_inclusive', 'Xé rách không gian, dịch chuyển tức thời', [
-    M('Vết Nứt', 'all_inclusive', 'line', 4, 3.8, { range: 16, w: 1.3 }),
-    M('Dịch Chuyển', 'move_up', 'dash', 7, 4.2, { range: 14, w: 2 }),
-    M('Hư Vô', 'blur_circular', 'zone', 15, 2.6, { dist: 7, radius: 5, ticks: 5, every: 0.4, fx: 'stun' }),
+    M('Vết Nứt', 'all_inclusive', 'line', 4, 3.8, { range: 16, w: 1.3, vis: 'beam' }),
+    M('Dịch Chuyển', 'move_up', 'blink', 7, 4.5, { range: 14, radius: 3 }),
+    M('Hư Không Hộ Thể', 'shield_moon', 'shield', 13, 3, { dur: 4, red: 0.6, radius: 5, fx: 'pull' }),
+    M('Hư Vô', 'blur_circular', 'zone', 16, 2.8, { range: 11, radius: 5, ticks: 5, every: 0.4, fx: 'stun', vis: 'vortex' }),
   ]),
   P('dragon', 'Ấn Long Hồn', 'legend', 0x3ae08a, 'pets', 'Hồn rồng cổ đại, mạnh mẽ toàn diện', [
     M('Long Tức', 'whatshot', 'cone', 4, 4, { range: 8, arc: 1.1, fx: 'burn' }),
     M('Long Trảo', 'pets', 'dash', 8, 5.2, { range: 11, w: 2, fx: 'knock' }),
-    M('Long Vũ', 'tornado', 'nova', 15, 9, { radius: 7.5, fx: 'stun', heal: 0.15 }),
+    M('Long Hồn', 'tornado', 'aura', 13, 2, { radius: 5, ticks: 6, every: 0.45, fx: 'burn' }),
+    M('Long Vũ', 'storm', 'nova', 16, 10, { radius: 7.5, fx: 'stun', heal: 0.15 }),
   ]),
   P('star', 'Ấn Tinh Tú', 'legend', 0xffd0f0, 'star', 'Gọi sao trời rơi xuống chiến trường', [
     M('Sao Băng', 'star', 'bolt', 3.5, 2.8, { range: 16, speed: 30, r: 0.6, count: 5, spread: 0.14 }),
-    M('Tinh Vân', 'auto_awesome', 'zone', 9, 1.6, { dist: 6, radius: 4.5, ticks: 5, every: 0.4, fx: 'slow' }),
-    M('Siêu Tân Tinh', 'brightness_high', 'leap', 15, 10, { range: 9, radius: 6.5, fx: 'knock' }),
+    M('Tinh Vân', 'auto_awesome', 'zone', 9, 1.6, { range: 10, radius: 4.5, ticks: 5, every: 0.4, fx: 'slow', vis: 'rain' }),
+    M('Sao Chổi', 'flare', 'chain', 11, 4.5, { range: 13, jumps: 4, fx: 'stun' }),
+    M('Siêu Tân Tinh', 'brightness_high', 'meteor', 16, 12, { range: 13, radius: 6.5, delay: 0.9, fx: 'knock' }),
   ]),
 ];
 export const POWER_BY_ID = Object.fromEntries(POWERS.map(p => [p.id, p]));
 for (const pw of POWERS) list.push({ id: `pw_${pw.id}`, name: pw.name, slot: 'power', shop: 'shrine', rarity: pw.rarity, color: pw.color, power: pw.id,
   ...(typeof POWER_PRICE[pw.rarity] === 'string' ? { gems: +POWER_PRICE[pw.rarity] } : { price: POWER_PRICE[pw.rarity] }) });
 
+/** The moves of a fighting style for this player, and the mastery each one needs. */
+export const movesOf = (p, style) => (style === 'power' ? (p.power ? POWER_BY_ID[p.power.id].moves : []) : STYLE_MOVES[style] || []);
+export const unlockOf = (style) => (style === 'power' ? POWER_UNLOCK : STYLE_UNLOCK);
+/** How a move is aimed: 'dir' (a direction), 'point' (a spot within range) or 'self'. */
+export const aimKind = (mv) => (['leap', 'blink', 'zone', 'meteor'].includes(mv.k) ? 'point' : ['nova', 'aura', 'shield'].includes(mv.k) ? 'self' : 'dir');
 /** How far a move can reach from where it was cast (for hit checks). */
 export function moveReach(mv) {
   switch (mv.k) {
     case 'bolt': case 'cone': case 'line': return mv.range;
-    case 'nova': return mv.radius;
+    case 'chain': return mv.range + mv.jumps * CHAIN_HOP;
     case 'dash': return mv.range + mv.w;
-    case 'leap': return mv.range + mv.radius;
-    case 'zone': return mv.dist + mv.radius;
+    case 'leap': case 'blink': case 'zone': case 'meteor': return mv.range + mv.radius;
   }
-  return 6;
+  return mv.radius || 6;
 }
 /** How many times one cast may hit the same target. */
-export const moveHits = (mv) => (mv.k === 'zone' ? mv.ticks : mv.k === 'bolt' ? mv.count || 1 : 1);
+export const moveHits = (mv) => (mv.k === 'zone' || mv.k === 'aura' ? mv.ticks : mv.k === 'bolt' ? mv.count || 1 : 1);
 /** How long after the cast hits may still arrive (seconds). */
-export const moveWindow = (mv) => 1.2 + (mv.k === 'bolt' ? mv.range / mv.speed : mv.k === 'zone' ? mv.ticks * mv.every + 0.3 : mv.k === 'dash' || mv.k === 'leap' ? 0.6 : 0);
+export const moveWindow = (mv) => 1.2 + (mv.k === 'bolt' ? mv.range / mv.speed : mv.k === 'zone' || mv.k === 'aura' ? mv.ticks * mv.every + 0.3
+  : mv.k === 'meteor' ? mv.delay + 0.3 : mv.k === 'dash' || mv.k === 'leap' || mv.k === 'blink' ? 0.6 : 0);
 export const PURGE_COST = 1000;
 
 export const ITEMS = Object.fromEntries(list.map(it => [it.id, it]));
@@ -525,28 +581,68 @@ export function shrineStock(now) {
 }
 
 /* ---- Derived stats ---------------------------------------------------------------------------- */
-export const xpNeed = (lv) => Math.floor(10 + lv * 4 + lv * lv * 0.55);
 const gearOf = (p) => GEAR_SLOTS.map(s => ITEMS[p.gear[s]]).filter(Boolean);
 const sumStat = (p, k) => gearOf(p).reduce((s, it) => s + (it[k] || 0), 0);
 export const masteryOf = (p, key) => (key === 'power' ? p.power : p.mastery[key]);
-export const maxHpFor = (p) => Math.round(100 + (p.mastery.defense.lv - 1) * 14 + sumStat(p, 'hp'));
-export const defReduceFor = (p) => Math.min(0.75, (p.mastery.defense.lv - 1) * 0.006 + sumStat(p, 'red'));
+export const pointsLeft = (p) => POINTS_PER_LV * (p.level - 1) - STAT_KEYS.reduce((s, k) => s + p.stats[k], 0);
+export const maxHpFor = (p) => Math.round(100 + (p.level - 1) * 6 + p.stats.defense * 12 + sumStat(p, 'hp'));
+export const defReduceFor = (p) => Math.min(0.75, p.stats.defense * 0.001 + sumStat(p, 'red'));
 export const critFor = (p) => CRIT.chance + sumStat(p, 'crit');
 export const speedFor = (p) => SPEED * (1 + Math.min(0.2, sumStat(p, 'speed')));
+// Each stat point adds 5% to its style's damage; mastery adds a little on top.
 export function dmgFor(p, style, mult = 1) {
-  const bonus = 1 + sumStat(p, 'dmg');
+  const bonus = (1 + sumStat(p, 'dmg')) * (1 + p.stats[style] * 0.05);
   if (style === 'power') {
     if (!p.power) return 0;
-    return STYLES.power.base * (1 + (p.power.lv - 1) * 0.1) * RAR_MULT[POWER_BY_ID[p.power.id].rarity] * mult * bonus;
+    return STYLES.power.base * (1 + (p.power.lv - 1) * 0.005) * RAR_MULT[POWER_BY_ID[p.power.id].rarity] * mult * bonus;
   }
   const gear = style === 'sword' ? ITEMS[p.gear.sword]?.mult || 1 : ITEMS[p.gear.glove]?.mult || 1;
-  return STYLES[style].base * (1 + (p.mastery[style].lv - 1) * 0.1) * gear * mult * bonus;
+  return STYLES[style].base * (1 + (p.mastery[style].lv - 1) * 0.005) * gear * mult * bonus;
 }
 /** Can this player fight with this style right now? */
 export const styleOk = (p, s) => s === 'melee' || (s === 'sword' && !!p.gear.sword) || (s === 'power' && !!p.power);
 
+/* ---- Looks ------------------------------------------------------------------------------------
+ * Picked once in the character creator (and changeable later): body, hair, eyes, skin, scarf.
+ * Stored as small indices into these lists; `g` is 'm' or 'f'.
+ */
+export const AVATAR = {
+  hair: [
+    { id: 'parted', name: 'Rẽ ngôi', node: 'Hair_SimpleParted', fit: 'm' },
+    { id: 'spiky', name: 'Tóc gai', node: 'Hair_Buzzed', fit: 'm', spikes: true },
+    { id: 'buzz', name: 'Cắt ngắn', node: 'Hair_Buzzed', fit: 'm' },
+    { id: 'long', name: 'Tóc dài', node: 'Hair_Long', fit: 'f' },
+    { id: 'buns', name: 'Búi hai bên', node: 'Hair_Buns', fit: 'f' },
+    { id: 'pixie', name: 'Tém', node: 'Hair_BuzzedFemale', fit: 'f' },
+  ],
+  hairColor: [0x2a1c14, 0x5a3418, 0xa8642a, 0xf0c878, 0xe6e6ee, 0x1c2034, 0xd8303c, 0x3a6ae0, 0xff8ac8, 0x34b07a],
+  eyes: [{ id: 'round', name: 'Tròn' }, { id: 'sparkle', name: 'Long lanh' }, { id: 'sharp', name: 'Sắc' }, { id: 'cat', name: 'Mắt mèo' }],
+  eyeColor: [0x6a3a1a, 0x2a8ad8, 0x2fa060, 0x9a40d0, 0xd83040, 0xe0a020, 0x3fc8d8, 0x2a2a2a],
+  skin: [0xffe3cf, 0xf6cfaa, 0xe0aa80, 0xb47a52, 0x7a4c32],
+  scarf: [0xf08a24, 0xd8303c, 0x3a6ae0, 0x34b07a, 0x9a50e0, 0xf2f2f2, 0x24242c, -1],
+};
+export const defaultAvatar = (g = 'm') => ({ g, hair: g === 'f' ? 3 : 0, hc: g === 'f' ? 1 : 0, eye: g === 'f' ? 1 : 0, ec: g === 'f' ? 1 : 0, skin: 1, beard: 0, sc: 0 });
+const AV_KEYS = { hair: 'hair', hc: 'hairColor', eye: 'eyes', ec: 'eyeColor', skin: 'skin', sc: 'scarf' };
+/** A valid avatar from untrusted input, or null. */
+export function cleanAvatar(a) {
+  if (!a || typeof a !== 'object' || (a.g !== 'm' && a.g !== 'f')) return null;
+  const out = { g: a.g, beard: a.beard === 1 && a.g === 'm' ? 1 : 0 };
+  for (const [k, list] of Object.entries(AV_KEYS)) {
+    if (!Number.isInteger(a[k]) || a[k] < 0 || a[k] >= AVATAR[list].length) return null;
+    out[k] = a[k];
+  }
+  return out;
+}
+export const avatarCode = (a) => (a ? [a.g, a.hair, a.hc, a.eye, a.ec, a.skin, a.beard, a.sc].join('.') : '');
+export function parseAvatar(s) {
+  const [g, hair, hc, eye, ec, skin, beard, sc] = String(s || '').split('.');
+  return cleanAvatar({ g, hair: +hair, hc: +hc, eye: +eye, ec: +ec, skin: +skin, beard: +beard, sc: +sc });
+}
+
 export const defaultProgress = () => ({
-  mastery: { melee: { lv: 1, xp: 0 }, sword: { lv: 1, xp: 0 }, defense: { lv: 1, xp: 0 } },
+  level: 1, xp: 0, stats: { melee: 0, defense: 0, sword: 0, power: 0 },
+  mastery: { melee: { lv: 1, xp: 0 }, sword: { lv: 1, xp: 0 } },
+  avatar: null,
   gold: 0, gems: 0, style: 'melee',
   gear: { sword: 'sw_wood', glove: null, shirt: 'sh_tee', hat: null, acc: null },
   inv: { sw_wood: 1, sh_tee: 1 },
@@ -558,7 +654,8 @@ export const defaultProgress = () => ({
 export const invCount = (p, id) => p.inv[id] || 0;
 
 export const ANIMS = ['Idle', 'Unarmed_Idle', 'Walking_A', 'Running_A', '1H_Melee_Attack_Chop', '1H_Melee_Attack_Slice_Horizontal', '1H_Melee_Attack_Slice_Diagonal',
-  '2H_Melee_Attack_Spin', '2H_Melee_Attack_Chop', 'Unarmed_Melee_Attack_Punch_A', 'Unarmed_Melee_Attack_Punch_B', 'Unarmed_Melee_Attack_Kick', 'Hit_A', 'Death_A', 'Cast_A'];
+  '2H_Melee_Attack_Spin', '2H_Melee_Attack_Chop', 'Unarmed_Melee_Attack_Punch_A', 'Unarmed_Melee_Attack_Punch_B', 'Unarmed_Melee_Attack_Kick', 'Hit_A', 'Death_A', 'Cast_A',
+  'Roll', 'Jump_Start', 'Jump_Land', 'Spell_Enter', 'Spell_Exit', 'Dance'];
 
 export const NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N} _.-]{1,15}$/u;
 export const cleanName = (s) => String(s || '').normalize('NFC').replace(/\s+/g, ' ').trim();
@@ -580,7 +677,7 @@ export const QUESTS = (() => {
     out.push({
       id: `q_${type}`, type, board: board.id, count,
       gold: Math.round(avgGold * count * (t.boss ? 3 : 1.5) / 10) * 10,
-      xp: Math.round(t.lv * (t.boss ? 60 : 18)),
+      xp: Math.round((t.lv * t.lv * 0.9 + t.lv * 12 + 15) * (t.boss ? 12 : 6)),
       gems: t.boss ? Math.max(3, Math.round(t.lv / 20)) : t.lv >= 40 ? 1 : 0,
     });
   }

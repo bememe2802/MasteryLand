@@ -9,3 +9,7 @@
   https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Fox
 
 Files were re-packed with glTF-Transform (unused animations pruned, meshopt compression).
+
+- **Universal Base Characters** and **Universal Animation Library** by Quaternius — CC0 1.0
+  https://quaternius.com
+  Used: hero (male body), heroine (female body), hairs (hairstyles, beard), ual (player animations)

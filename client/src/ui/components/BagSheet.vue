@@ -3,7 +3,7 @@ import { computed, ref } from 'vue';
 import { ui, game } from '../state.js';
 import Sheet from './Sheet.vue';
 import ItemTile from './ItemTile.vue';
-import { ITEMS, ITEM_LIST, SLOTS, GEAR_SLOTS, RARITY, POWER_BY_ID, POWER_UNLOCK, xpNeed } from '../../../../shared/rules.js';
+import { ITEMS, ITEM_LIST, SLOTS, GEAR_SLOTS, RARITY, POWER_BY_ID, POWER_UNLOCK, masteryNeed } from '../../../../shared/rules.js';
 import { fmt, statLine, sourceOf, powerMoves, rarityColor } from '../items.js';
 
 // Three tabs: what is worn (and the power), everything carried, and the full item list.
@@ -17,7 +17,7 @@ const power = computed(() => {
   const pw = prog.value.power;
   if (!pw) return null;
   const def = POWER_BY_ID[pw.id];
-  return { ...def, lv: pw.lv, pct: (pw.xp / xpNeed(pw.lv)) * 100, moves: def.moves.map((m, i) => ({ ...m, need: POWER_UNLOCK[i], open: pw.lv >= POWER_UNLOCK[i] })) };
+  return { ...def, lv: pw.lv, pct: (pw.xp / masteryNeed(pw.lv)) * 100, moves: def.moves.map((m, i) => ({ ...m, need: POWER_UNLOCK[i], open: pw.lv >= POWER_UNLOCK[i] })) };
 });
 const ORDER = ['power', 'sword', 'glove', 'shirt', 'hat', 'acc', 'potion', 'material'];
 const carried = computed(() => Object.entries(prog.value.inv)

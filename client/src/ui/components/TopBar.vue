@@ -5,7 +5,7 @@ import { fs, toggleFullscreen } from '../fullscreen.js';
 
 <template>
   <div id="topbar">
-    <button class="portrait hex frame" aria-label="Chỉ số" @click="openModal('stats')"><span class="ms">person</span></button>
+    <button class="portrait hex frame" aria-label="Chỉ số" @click="openModal('stats')"><span class="ms">person</span><i v-if="ui.hud.points" class="ptdot">+</i></button>
     <span class="lvl">{{ ui.hud.lv }}</span>
     <div class="bars">
       <div class="hp"><i :style="{ width: `${(ui.hud.hp / ui.hud.mhp) * 100}%` }"></i><span>{{ ui.hud.hp }} / {{ ui.hud.mhp }}</span></div>
