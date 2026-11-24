@@ -18,6 +18,7 @@ export const ui = reactive({
   /** A move button is being dragged to aim; cancel = the finger is over the cancel button. */
   aim: { on: false, cancel: false, aim: 'dir' },
   online: true,
+  sound: (() => { try { return localStorage.getItem('arenix.sound') !== '0'; } catch { return true; } })(),
   hud: {
     hp: 1, mhp: 1, xp: 0, lv: 1, points: 0,
     atkIcon: 'sports_mma',
@@ -43,7 +44,7 @@ export const input = { joyX: 0, joyY: 0, atkHeld: false };
 
 export const game = {
   attack() {}, skill(i) {}, aim(i, phase, dx, dy, k, cancel) { return false; }, stat(k, n) {}, statReset() {},
-  openCreator() {}, previewAvatar(a) {}, saveAvatar(a) {}, swap() {}, potion() {}, interact() {},
+  openCreator() {}, toggleSound() {}, previewAvatar(a) {}, saveAvatar(a) {}, swap() {}, potion() {}, interact() {},
   buy(id, qty) {}, sell(id, qty) {}, equip(slot, id) {}, use(id) {}, purge() {}, quest(kind, id) {},
   toggleQueue() {}, rename: async (name) => {}, logout() {},
   drawBigMap(canvas) {},

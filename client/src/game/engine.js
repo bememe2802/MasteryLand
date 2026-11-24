@@ -6,9 +6,12 @@ import {
   HALF, VILLAGE_R, RIVER_HW, BRIDGES, SPEED, riverX, inWater, inVillage, clamp, angDiff, CAMPS, ENEMIES, PATHS, distSeg, pathDist,
   VILLAGE_BUILDINGS, NPCS, NPC_RANGE, SAFE_R, CHECKPOINTS, isSafe, ARENA, STYLES, FINISHER, CRIT, SHRINE,
   ITEMS, POTION_CD, SHOPS, POWER_BY_ID, ENEMY_LIST, AVATAR, defaultAvatar, avatarCode, parseAvatar, movesOf, unlockOf, aimKind, moveReach, CHAIN_HOP, STAT_INFO, pointsLeft, REGIONS, regionAt, regionWeights, QUESTS, QUEST_BY_ID, BOARD_OFF, xpNeed, maxHpFor, defReduceFor, dmgFor, critFor, speedFor, masteryOf, styleOk,
-  defaultProgress, ANIMS,
+  defaultProgress, ANIMS, LANDMARKS, landmarkAt, CHESTS, CHEST_CD,
 } from '../../../shared/rules.js';
 import { api, ensureLogin, logout, connect } from './net.js';
+import { buildLandmarks, buildRegionProps, landmarkGround } from './biomes.js';
+import { createAmbient, dayState, rainState, clock as skyClock } from './ambient.js';
+import { sfx, sound } from './sfx.js';
 import { ui, input, game, toast, bigText, showZone, openModal, closeModal } from '../ui/state.js';
 
 const $ = (id) => document.getElementById(id);
@@ -27,6 +30,8 @@ function zoneAt(x, z) {
   if (P.arena) return 'Đấu Trường';
   if (inVillage(x, z)) return 'Làng Khởi Đầu';
   if (Math.hypot(x - SHRINE.x, z - SHRINE.z) < 16) return 'Đền Ấn Cổ';
+  const lm = landmarkAt(x, z, 4);
+  if (lm) return lm.name;
   for (const c of CAMPS) if (Math.hypot(x - c.x, z - c.z) < c.r + 10) return c.zone;
   const region = regionAt(x, z);
   if (region !== 'core') return REGIONS[region].name;
@@ -55,6 +60,7 @@ function groundColor(x, z) {
   if (w.volcano > 0.5) { const v = Math.max(0, vnoise(x * 0.6, z * 0.6) - 0.6) * 1.6 * w.volcano; r = lerp(r, 0.85, v); g = lerp(g, 0.32, v); b = lerp(b, 0.12, v); }
   if (w.desert > 0.5) { const v = Math.sin(x * 0.08 + Math.sin(z * 0.05) * 3) * 0.03 * w.desert; r += v; g += v; b += v * 0.5; }
   const nn = vnoise(x, z) * 0.03; r += nn; g += nn * 1.2; b += nn * 0.5;
+  const lg = landmarkGround(x, z, [r, g, b]); r = lg[0]; g = lg[1]; b = lg[2];
   const p = 1 - smooth(1.6, 3.2, pathDist(x, z));
   r = lerp(r, 0.78, p); g = lerp(g, 0.64, p); b = lerp(b, 0.43, p);
   const v = 1 - smooth(7, 10, Math.hypot(x, z));
@@ -78,7 +84,8 @@ scene.fog = new THREE.Fog(SKY, 42, 80);
 const camera = new THREE.PerspectiveCamera(40, 1, 1, 130);
 const CAM_OFF = new THREE.Vector3(0, 21, 13.5);
 let camDist = 1;
-scene.add(new THREE.HemisphereLight(0xe8f6ff, 0x5d6b3a, 1.5));
+const hemi = new THREE.HemisphereLight(0xe8f6ff, 0x5d6b3a, 1.5);
+scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xfff0d8, 2.6);
 sun.castShadow = true;
 sun.shadow.mapSize.set(isTouch ? 1024 : 2048, isTouch ? 1024 : 2048);
@@ -315,8 +322,11 @@ function buildNature() {
     for (const c of CAMPS) if (Math.abs(x - c.x) < c.r + 6 + pad && Math.hypot(x - c.x, z - c.z) < c.r + 4 + pad) return false;
     for (const c of CHECKPOINTS) if (Math.abs(x - c.x) < SAFE_R + 1 && Math.hypot(x - c.x, z - c.z) < SAFE_R + 1) return false;
     if (pathDist(x, z) < 3.6 + pad * 0.8) return false;
+    if (landmarkAt(x, z, pad + 2)) return false;
+    if (CHESTS.some(c => Math.abs(x - c.x) < 3 + pad && Math.hypot(x - c.x, z - c.z) < 3 + pad)) return false;
     return !obsNear(x, z, pad);
   };
+  world.props = buildRegionProps({ scene, addObs, free, regionAt, rand, isForest: (x) => x < -40 });
   const TREE_DENSITY = { swamp: 0.8, desert: 0.03, snow: 0.35, volcano: 0.05 };
   let trees = 0;
   for (let t = 0; t < 140000 && trees < 4200; t++) {
@@ -365,7 +375,7 @@ function buildNature() {
   for (let t = 0; t < 30000 && tufts.length < 9000; t++) {
     const x = rr(-HALF, HALF), z = rr(-HALF, HALF);
     const region = regionAt(x, z);
-    if ((region !== 'core' && region !== 'swamp') || Math.abs(x - riverX(z)) < RIVER_HW + 1 || inVillage(x, z) || isRocky(x, z) || pathDist(x, z) < 2) continue;
+    if ((region !== 'core' && region !== 'swamp') || Math.abs(x - riverX(z)) < RIVER_HW + 1 || inVillage(x, z) || isRocky(x, z) || pathDist(x, z) < 2 || landmarkAt(x, z, 1)) continue;
     (region === 'core' && rand() < 0.2 ? flowers : tufts).push({ x, z, s: rr(0.7, 1.3), r: rr(0, 6) });
   }
   const dummy = new THREE.Object3D();
@@ -986,6 +996,7 @@ class Enemy {
     const heavy = this.t.boss ? 0.15 : 1;
     this.kx += kx * heavy; this.kz += kz * heavy;
     floatText(this.x, this.m.height + 0.3, this.z, Math.round(dmg), crit ? '#ffcf3a' : '#ffffff', crit ? 22 : 17);
+    sfx.hit(crit);
     spawnBurst(this.x, this.m.height * 0.5, this.z, this.look.burst || (this.look.bone ? 0xe8e2d0 : 0xff6a5a), 5, 3);
     if (this.rig && !this.t.boss && !this.fox) { this.rig.play('Hit_A', { once: true, dur: 0.35, fade: 0.05 }); this.stagger = 0.3; }
     if (this.hp <= 0) this.die();
@@ -1127,6 +1138,7 @@ function attack() {
   P.atkCd = st.cd * (finisher ? 1.35 : 1);
   P.actT = P.atkCd * 1.15;
   player.play(STYLE_UI[style].anims[P.combo], { once: true, dur: P.atkCd * 1.6, fade: 0.06 });
+  if (style === 'sword') sfx.slash(); else sfx.swing();
   net.send({ t: 'sw', r: Math.round(rot * 100) / 100 });
   P.pending.push({ t: st.cd * 0.35, fn: () => strike(style, finisher, rot) });
 }
@@ -1232,6 +1244,7 @@ function castMove(i, aim) {
   P.actT = mv.k === 'leap' ? 0.6 : 0.42; P.atkCd = Math.max(P.atkCd, 0.25);
   if (mv.heal) { floatText(P.x, 2.8, P.z, `+${Math.round(P.mhp * mv.heal)}`, '#7dff9a', 16); spawnBurst(P.x, 1.2, P.z, 0x7dff9a, 10, 3); }
   castStyle = style;
+  sfx.cast(mv.k, mv.fx);
   runMove(mv, moveColor(style, prog.power?.id), P, rot, d, true);
 }
 function runMove(mv, color, who, rot, d, mine) {
@@ -1416,6 +1429,7 @@ function updateLeap(dt) {
     player.play('Jump_Land', { once: true, dur: 0.4, fade: 0.05 });
     const mv = L.mv, ox = P.x, oz = P.z;
     spawnRing(ox, oz, mv.radius, L.color, 0.5); spawnDome(ox, oz, mv.radius, L.color, 0.4); spawnBurst(ox, 0.5, oz, L.color, 24, 8); P.shake = 0.4;
+    sfx.cast('land');
     eachTarget((tx, tz, tr) => Math.hypot(tx - ox, tz - oz) - tr <= mv.radius, (t, rem) => powerHit(t, rem, mv, ox, oz));
   }
 }
@@ -1500,6 +1514,7 @@ function spawnMeteor(x, z, mv, color, onHit) {
     rock.material.dispose(); glow.material.dispose();
     spawnRing(x, z, mv.radius, color, 0.55); spawnRing(x, z, mv.radius * 0.6, 0xffffff, 0.4); spawnDome(x, z, mv.radius, color, 0.5);
     spawnBurst(x, 0.6, z, color, 30, 9);
+    if (Math.hypot(x - P.x, z - P.z) < 30) sfx.cast('boom');
     for (let i = 0; i < 6; i++) { const a = (i / 6) * 6.28; spawnSpike(x + Math.cos(a) * mv.radius * 0.5, z + Math.sin(a) * mv.radius * 0.5, color, 0.6); }
     onHit();
   });
@@ -1581,6 +1596,7 @@ function enemyHitsMe(e) {
   net.send({ t: 'ue', e: e.id });
   floatText(P.x, 2.6, P.z, Math.round(e.t.dmg * (1 - defReduceFor(prog))), '#ff6a5a', 18);
   P.shake = Math.max(P.shake, 0.12); P.flash = 0.2; hurtFlash = 0.25;
+  sfx.hurt();
 }
 function usePotion() {
   if (P.dead || P.arena || P.potCd > 0) return;
@@ -1704,6 +1720,8 @@ function drawOverlay(dt) {
 const mm = $('minimap'), mctx = mm.getContext('2d');
 const WORLD = HALF * 2;
 const mmBg = document.createElement('canvas'); mmBg.width = mmBg.height = WORLD;
+const MAP_COLOR = { lake: '#4aaee8', oasis: '#4aaee8', boglake: '#4a6a44', frozenlake: 'rgba(220,240,255,.9)', lavalake: '#ff6a2a', volcano: '#3a302c',
+  pyramid: '#d9b77a', icecastle: '#dff4ff', sakura: 'rgba(255,183,213,.75)', farm: 'rgba(224,192,96,.7)', stones: '#9a9a92', bigtree: '#2e5a34', mushring: 'rgba(154,122,255,.7)', tower: '#b8564a', arch: '#c8643a' };
 function buildMinimapBg() {
   const c = mmBg.getContext('2d'); const img = c.createImageData(WORLD, WORLD);
   for (let j = 0; j < WORLD; j++) for (let i = 0; i < WORLD; i++) {
@@ -1712,7 +1730,12 @@ function buildMinimapBg() {
   }
   c.putImageData(img, 0, 0);
   c.fillStyle = 'rgba(40,60,30,.55)';
-  for (const o of obstacles) if (o.r > 1.5) { c.beginPath(); c.arc(o.x + HALF, o.z + HALF, o.r * 0.8, 0, 6.29); c.fill(); }
+  for (const o of obstacles) if (o.r > 1.5 && o.r < 6) { c.beginPath(); c.arc(o.x + HALF, o.z + HALF, o.r * 0.8, 0, 6.29); c.fill(); }
+  for (const L of LANDMARKS) {
+    const col = MAP_COLOR[L.kind]; if (!col) continue;
+    c.fillStyle = col; c.beginPath(); c.arc(L.x + HALF, L.z + HALF, L.block || L.r * 0.8, 0, 6.29); c.fill();
+    if (L.kind === 'volcano') { c.fillStyle = '#ff6a2a'; c.beginPath(); c.arc(L.x + HALF, L.z + HALF, 6, 0, 6.29); c.fill(); }
+  }
 }
 function dot(ctx, x, y, r, color) { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, r, 0, 6.29); ctx.fill(); }
 function arrow(ctx, x, y, rot, s) {
@@ -1731,6 +1754,7 @@ function drawMinimap() {
   for (const e of enemies) { if (e.dead) continue; const [x, y] = at(e.x, e.z); if (x < 0 || y < 0 || x > S || y > S) continue; dot(mctx, x, y, e.t.boss ? 8 : 3.5, e.t.boss ? '#c77bff' : e.aggro ? '#ff4b3e' : '#ffae4a'); }
   for (const n of world.npcs) { const [x, y] = at(n.x, n.z); dot(mctx, x, y, 5, '#' + n.look.color.toString(16).padStart(6, '0')); }
   for (const c of CHECKPOINTS) { const [x, y] = at(c.x, c.z); dot(mctx, x, y, 5, prog.checkpoints.includes(c.id) ? '#7ff0ff' : '#9aa0a8'); }
+  for (const c of world.chests || []) { if (!chestReady(c)) continue; const [x, y] = at(c.x, c.z); if (x > 0 && y > 0 && x < S && y < S) { dot(mctx, x, y, 5, '#3a2a0a'); dot(mctx, x, y, 3.5, '#ffd36b'); } }
   for (const r of remotes.values()) { const [x, y] = at(r.x, r.z); dot(mctx, x, y, 4, '#7fb8ff'); }
   arrow(mctx, S / 2, S / 2, P.rot, 10);
   mctx.restore();
@@ -1755,6 +1779,9 @@ function drawBigMap(bm) {
   for (const n of world.npcs) { const [x, y] = at(n.x, n.z); dot(bctx, x, y, S / 70, 'rgba(0,0,0,.55)'); bctx.fillStyle = '#' + n.look.color.toString(16).padStart(6, '0'); bctx.fillText(n.look.icon, x, y); }
   for (const c of CHECKPOINTS) { const [x, y] = at(c.x, c.z); const on = prog.checkpoints.includes(c.id); dot(bctx, x, y, S / 70, 'rgba(0,0,0,.55)'); bctx.fillStyle = c.id === prog.checkpoint ? '#7dff9a' : on ? '#7ff0ff' : '#9aa0a8'; bctx.fillText('flag', x, y); }
   for (const r of remotes.values()) { const [x, y] = at(r.x, r.z); dot(bctx, x, y, S / 110, '#7fb8ff'); }
+  bctx.font = `700 ${Math.round(S / 70)}px ${FONT}`; bctx.lineWidth = 3;
+  for (const L of LANDMARKS) { const [x, y] = at(L.x, L.z); bctx.strokeStyle = 'rgba(0,0,0,.6)'; bctx.fillStyle = '#fff6d8'; bctx.strokeText(L.name, x, y + (L.block || L.r * 0.8) * sc + S / 90); bctx.fillText(L.name, x, y + (L.block || L.r * 0.8) * sc + S / 90); }
+  for (const c of world.chests || []) if (chestReady(c)) { const [x, y] = at(c.x, c.z); dot(bctx, x, y, S / 160, '#ffd36b'); }
   if (!P.arena) { const [x, y] = at(P.x, P.z); arrow(bctx, x, y, P.rot, S / 50); }
 }
 
@@ -1785,12 +1812,23 @@ function updateCooldowns() {
   ui.hud.safe = !P.arena && isSafe(P.x, P.z);
 }
 const skyCol = new THREE.Color(), skyTmp = new THREE.Color();
+const NIGHT_SKY = new THREE.Color(0x16233f), DUSK_SKY = new THREE.Color(0xf0a070), RAIN_SKY = new THREE.Color(0x6a7684);
+const SUN_DAY = new THREE.Color(0xfff0d8), SUN_DUSK = new THREE.Color(0xffa060), MOON = new THREE.Color(0x9ab8ff);
+/** The sky follows the region, the time of day and the rain; the sun dims at night and in rain. */
 function updateSky() {
-  if (P.arena) return;
+  const ds = dayState();
   const w = regionWeights(P.x, P.z);
-  skyCol.setHex(REGION_SKY.core);
-  for (const k of ['snow', 'swamp', 'desert', 'volcano']) if (w[k]) skyCol.lerp(skyTmp.setHex(REGION_SKY[k]), w[k]);
-  scene.background.lerp(skyCol, 0.15); scene.fog.color.copy(scene.background);
+  const wet = rainState() * (1 - w.snow - w.desert - w.volcano);
+  if (!P.arena) {
+    skyCol.setHex(REGION_SKY.core);
+    for (const k of ['snow', 'swamp', 'desert', 'volcano']) if (w[k]) skyCol.lerp(skyTmp.setHex(REGION_SKY[k]), w[k]);
+    skyCol.lerp(DUSK_SKY, ds.dusk * 0.3).lerp(NIGHT_SKY, (1 - ds.day) * 0.6).lerp(RAIN_SKY, wet * 0.45);
+    scene.background.lerp(skyCol, 0.15); scene.fog.color.copy(scene.background);
+  }
+  sun.intensity = 2.6 * (0.4 + 0.6 * ds.day) * (1 - wet * 0.4);
+  sun.color.copy(SUN_DAY).lerp(SUN_DUSK, ds.dusk * 0.6).lerp(MOON, 1 - ds.day);
+  hemi.intensity = 1.5 * (0.62 + 0.38 * ds.day) * (1 - wet * 0.25);
+  world.night = 1 - ds.day; world.wet = wet;
 }
 let curZone = '';
 let wasSafe = null;
@@ -1858,6 +1896,7 @@ Object.assign(game, {
   stat: (k, n = 1) => net.send({ t: 'stat', k, n }),
   statReset: () => net.send({ t: 'sreset' }),
   openCreator: () => openCreator(),
+  toggleSound: () => { ui.sound = sound.toggle(); },
   previewAvatar: (a) => previewAvatar(a),
   saveAvatar: (a) => saveAvatar(a),
   swap: () => swapStyle(),
@@ -1904,6 +1943,7 @@ function onNet(m) {
     case 'loot': {
       const e = enemyById.get(m.e);
       if (e) floatText(e.x, e.m.height + 0.9, e.z, `+${m.g}`, '#ffd36b', 15);
+      sfx.coin();
       if (e && m.gems) floatText(e.x, e.m.height + 1.6, e.z, `+${m.gems} ngọc`, '#7fe8ff', 16);
       if (e && m.xp) floatText(e.x, e.m.height + 1.3, e.z, `+${m.xp} KN`, '#b7ff7a', 14);
       for (const id of m.items || []) toast(`+ ${ITEMS[id].name}`);
@@ -1913,6 +1953,7 @@ function onNet(m) {
       const style = m.s || 'power', moves = style === 'power' ? POWER_BY_ID[m.p]?.moves : movesOf(prog, style);
       const mv = moves?.[m.m];
       const who = remotes.get(m.id) || { x: m.x, z: m.z };
+      if (mv && Math.hypot(who.x - P.x, who.z - P.z) < 26) sfx.cast(mv.k, mv.fx);
       if (mv) runMove(mv, style === 'power' ? POWER_BY_ID[m.p].color : style === 'sword' ? SWORD_GLOW : FIST_GLOW, who, m.r, m.d || 0, false);
       break;
     }
@@ -1940,8 +1981,8 @@ function onNet(m) {
       if (x == null) break;
       floatText(x, 2.6, z, m.dmg, toMe ? '#ff6a5a' : m.crit ? '#ffcf3a' : '#ffffff', m.crit ? 22 : 18);
       spawnBurst(x, 1.2, z, 0xff6a5a, 6, 3);
-      if (toMe) { P.kx += m.kx; P.kz += m.kz; P.flash = 0.2; hurtFlash = 0.25; P.shake = Math.max(P.shake, 0.15); }
-      else if (target) target.flashT = 0.15;
+      if (toMe) { P.kx += m.kx; P.kz += m.kz; P.flash = 0.2; hurtFlash = 0.25; P.shake = Math.max(P.shake, 0.15); sfx.hurt(); } else sfx.hit(m.crit);
+      if (!toMe && target) target.flashT = 0.15;
       break;
     }
     case 'bought': toast(`Đã mua ${ITEMS[m.id].name}`); break;
@@ -1955,6 +1996,14 @@ function onNet(m) {
       break;
     }
     case 'kicked': openModal('kicked'); break;
+    case 'chest': {
+      const c = world.chests?.[m.id];
+      prog.chests[m.id] = Date.now();
+      if (c) { c.openT = 0; spawnBurst(c.x, 1, c.z, 0xffd36b, 30, 6); spawnPillar(c.x, c.z, 0xffd36b, 0.9); spawnRing(c.x, c.z, 3, 0xffd36b, 0.6); }
+      bigText('Rương Báu', [`+${m.g.toLocaleString('vi-VN')} vàng`, `+${m.xp.toLocaleString('vi-VN')} KN`, m.gems ? `+${m.gems} ngọc` : '', m.item ? ITEMS[m.item].name : ''].filter(Boolean).join(' · '), 2400);
+      sfx.chest();
+      break;
+    }
     case 'welcome': {
       Object.assign(me, m.me); syncMe(); onProg(m.prog);
       if (P.arena) leaveArena();
@@ -1973,12 +2022,13 @@ function onProg(p) {
   if (old.level && p.level > old.level) {
     bigText(`Cấp ${p.level}`, `+${(p.level - old.level) * 3} điểm chỉ số`, 1800);
     spawnRing(P.x, P.z, 2.6, 0xffe066, 0.6); spawnPillar(P.x, P.z, 0xffe066, 0.8); spawnBurst(P.x, 1.2, P.z, 0xffe066, 24, 6);
+    sfx.level();
   }
   for (const k of ['melee', 'sword', 'power']) {
     const a = masteryOf(old, k), b = masteryOf(p, k);
     if (!a || !b || (k === 'power' && old.power?.id !== p.power?.id) || b.lv <= a.lv) continue;
     toast(`Thông thạo ${MASTERY_INFO[k][0]} ${b.lv}`);
-    unlockOf(k).forEach((lv, i) => { const mv = movesOf(p, k)[i]; if (mv && b.lv >= lv && a.lv < lv) bigText(mv.n, 'Đã mở chiêu mới', 1800); });
+    unlockOf(k).forEach((lv, i) => { const mv = movesOf(p, k)[i]; if (mv && b.lv >= lv && a.lv < lv) { bigText(mv.n, 'Đã mở chiêu mới', 1800); sfx.unlock(); } });
   }
   for (const [id, n] of Object.entries(p.quests || {})) {
     const q = QUEST_BY_ID[id];
@@ -1996,6 +2046,7 @@ function die(by) {
   P.dead = true; P.deadT = 0; P.pending.length = 0; P.dash = null;
   if (P.leap) { P.leap = null; player.root.position.y = 0; }
   player.play('Death_A', { once: true, fade: 0.1 });
+  sfx.die();
   if (!P.arena) setTimeout(() => { if (P.dead) ui.dead = true; }, 700);
   if (by) toast(by);
 }
@@ -2086,6 +2137,54 @@ function updatePlayer(dt, time) {
   }
 }
 const camGoal = new THREE.Vector3(), camOff = new THREE.Vector3(), camLook = new THREE.Vector3(), tmpLook = new THREE.Vector3();
+/* ---- Treasure chests --------------------------------------------------------------------------
+ * Fixed spots on the map; walking up to one that is ready opens it (the server checks distance and
+ * the per-player cooldown). A ready chest glows and bobs a sparkle; an opened one stays open.
+ */
+let ambient = null;
+const chestReady = (c) => Date.now() - (prog.chests?.[c.id] || 0) >= CHEST_CD;
+function buildChests() {
+  const wood = mat(0x8a5a2a), band = mat(0xd8b048, { metalness: 0.7, roughness: 0.3 });
+  const baseG = new THREE.BoxGeometry(1.3, 0.75, 0.85), lidG = new THREE.CylinderGeometry(0.43, 0.43, 1.3, 10, 1, false, 0, Math.PI);
+  lidG.rotateZ(Math.PI / 2); lidG.translate(0, 0, 0.43);
+  world.chests = CHESTS.map(c => {
+    const g = new THREE.Group(); g.position.set(c.x, 0, c.z); g.rotation.y = (c.id * 1.7) % 6.28; scene.add(g);
+    mesh(baseG, wood, 0, 0.38, 0, g);
+    for (const x of [-0.5, 0.5]) mesh(new THREE.BoxGeometry(0.1, 0.78, 0.9), band, x, 0.38, 0, g);
+    mesh(new THREE.BoxGeometry(0.2, 0.24, 0.06), band, 0, 0.6, 0.44, g);
+    const lid = new THREE.Group(); lid.position.set(0, 0.75, -0.43); g.add(lid);
+    mesh(lidG, wood, 0, 0, 0, lid);
+    const glowM = new THREE.MeshBasicMaterial({ color: 0xffd36b, transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending });
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.9, 7, 12, 1, true), glowM); beam.position.y = 3.5; g.add(beam);
+    addObs(c.x, c.z, 0.8);
+    return { ...c, g, lid, beam, sent: 0, openT: 1 };
+  });
+}
+function updateChests(dt, time) {
+  if (!world.chests) return;
+  for (const c of world.chests) {
+    if (Math.abs(c.x - P.x) > 60 || Math.abs(c.z - P.z) > 60) continue;
+    const ready = chestReady(c);
+    c.lid.rotation.x = ready ? Math.sin(time * 2 + c.id) * 0.03 : Math.max(c.lid.rotation.x - dt * 6, -1.9);
+    c.beam.visible = ready; c.beam.material.opacity = 0.25 + Math.sin(time * 3 + c.id) * 0.1;
+    if (ready && Math.random() < dt * 3) spawnBurst(c.x + fx(-0.6, 0.6), 1.2, c.z + fx(-0.6, 0.6), 0xffe9a0, 1, 1.2);
+    if (ready && !P.dead && !P.arena && Math.hypot(c.x - P.x, c.z - P.z) < 2.6 && time - c.sent > 2) { c.sent = time; net.send({ t: 'chest', id: c.id }); }
+  }
+}
+/** Lava breathes, spirit lights and the castle spire float, rain splashes. */
+function updateLandmarks(dt, time) {
+  const L = world.landmarks; if (!L) return;
+  const night = world.night || 0;
+  for (const m of L.lava) m.emissiveIntensity = 1.1 + Math.sin(time * 1.7) * 0.25 + night * 0.4;
+  for (const m of L.glow) m.emissiveIntensity = 0.5 + Math.sin(time * 2.3) * 0.2 + night * 0.6;
+  for (const w of L.water) w.m.color.copy(w.base).offsetHSL(0, 0, Math.sin(time * 1.3) * 0.02 - night * 0.12);
+  L.castle.forEach((o, i) => { o.userData.y ??= o.position.y; o.position.y = o.userData.y + Math.sin(time * 1.2 + i) * 0.3; o.rotation.y += dt * 0.3; });
+}
+function splash(x, z, loud) {
+  spawnRing(x, z, loud ? 1.2 : 0.35, 0xd8ecff, loud ? 0.5 : 0.3);
+  if (loud) { spawnBurst(x, 0.2, z, 0x9ad8ff, 6, 2.5); if (Math.hypot(x - P.x, z - P.z) < 20) sfx.splash(); }
+}
+
 /* ---- Character creator ----------------------------------------------------------------------
  * The camera comes down to the player, who turns to face it; the Vue panel edits ui.creator.a and
  * every change rebuilds the body. Saving sends the looks to the server, which shows them to others.
@@ -2158,6 +2257,9 @@ function frame(dt, time) {
     world.shrineGems.forEach((g, i) => { g.rotation.y = time * 1.5; g.position.y = 3.8 + Math.sin(time * 2 + i) * 0.15; });
   }
   updateParticles(dt); updateEffects(dt); updateCamera(dt);
+  if (ambient) ambient.update(dt, time, P.x, P.z, 1 - (world.night || 0), rainState(), splash);
+  updateLandmarks(dt, time);
+  updateChests(dt, time);
   world.water.material.color.setHSL(0.56, 0.75, 0.6 + Math.sin(time * 1.4) * 0.02);
   for (const f of world.fires) { const k = 1 + Math.sin(time * 18 + f.f1.id) * 0.12; f.f1.scale.set(k, 1 + Math.sin(time * 13) * 0.15, k); f.f2.scale.setScalar(1 + Math.sin(time * 21) * 0.15); }
   renderer.render(scene, camera);
@@ -2190,7 +2292,11 @@ async function boot(login) {
   buildGround();
   buildVillage();
   buildCheckpoints();
+  world.landmarks = buildLandmarks({ scene, addObs, inst, rand });
   buildNature();
+  buildChests();
+  ambient = createAmbient({ scene });
+  ambient.addVents(world.props.vents);
   buildPlayer();
   spawnEnemies();
   buildMinimapBg();
@@ -2200,7 +2306,7 @@ async function boot(login) {
   ui.booted = true;
   started = true;
   if (!prog.avatar) openCreator();
-  if (new URLSearchParams(location.search).has('debug')) window.__game = { P, enemies, remotes, get prog() { return prog; }, net, castMove, aimMove, game, zoom: (k) => { camDist = k; }, camOff: CAM_OFF, player: () => player, step: (sec, dt = 1 / 30) => { for (let t = 0; t < sec; t += dt) frame(dt, clock.elapsedTime += dt); } };
+  if (new URLSearchParams(location.search).has('debug')) window.__game = { P, enemies, remotes, get prog() { return prog; }, net, castMove, aimMove, game, skyClock, zoom: (k) => { camDist = k; }, camOff: CAM_OFF, player: () => player, step: (sec, dt = 1 / 30) => { for (let t = 0; t < sec; t += dt) frame(dt, clock.elapsedTime += dt); } };
   loop();
 }
 let started = false;

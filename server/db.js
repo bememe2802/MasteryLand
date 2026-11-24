@@ -2,7 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import Database from 'better-sqlite3';
-import { defaultProgress, MAX_LV, MASTERY_MAX, STAT_KEYS, POINTS_PER_LV, cleanAvatar, CHECKPOINTS, ITEMS, GEAR_SLOTS, POWER_BY_ID, QUEST_BY_ID, QUEST_MAX } from '../shared/rules.js';
+import { defaultProgress, MAX_LV, MASTERY_MAX, STAT_KEYS, POINTS_PER_LV, cleanAvatar, CHESTS, CHEST_CD, CHECKPOINTS, ITEMS, GEAR_SLOTS, POWER_BY_ID, QUEST_BY_ID, QUEST_MAX } from '../shared/rules.js';
 
 export function openDb(root) {
   fs.mkdirSync(path.join(root, 'data'), { recursive: true });
@@ -117,6 +117,8 @@ function repairProgress(raw) {
     d.level = Math.max(1, Math.min(MAX_LV, Math.floor(best * 0.6)));
   }
   d.avatar = cleanAvatar(p.avatar);
+  // Only chests still cooling down are worth remembering.
+  for (const [id, at] of Object.entries(p.chests || {})) if (CHESTS[id] && Date.now() - num(at, 0, 1e15, 0) < CHEST_CD) d.chests[id] = at;
   d.gold = Math.floor(num(p.gold, 0, 1e12, 0));
   d.gems = Math.floor(num(p.gems, 0, 1e9, 0));
   if (p.inv && typeof p.inv === 'object') {

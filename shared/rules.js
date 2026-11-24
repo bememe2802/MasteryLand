@@ -648,6 +648,7 @@ export const defaultProgress = () => ({
   inv: { sw_wood: 1, sh_tee: 1 },
   power: null, // { id, lv, xp }
   quests: {}, // quest id -> kills so far (only accepted quests)
+  chests: {}, // chest id -> when this player last opened it
   checkpoint: 'village', checkpoints: ['village'],
 });
 /** Count of an item in the bag, including what is worn (worn items stay in the bag). */
@@ -685,3 +686,54 @@ export const QUESTS = (() => {
 })();
 export const QUEST_BY_ID = Object.fromEntries(QUESTS.map(q => [q.id, q]));
 export const BOARD_OFF = { x: 3.2, z: -1.2 };
+
+/* ---- Landmarks --------------------------------------------------------------------------------
+ * One-of-a-kind places that give every region its own look: lakes, a pyramid, a volcano, an ice
+ * castle. `r` is the size of the place; scenery keeps out of it and its name shows on arrival.
+ * `block` is the radius players cannot walk into (water, lava, solid buildings), 0 if open.
+ */
+export const LANDMARKS = [
+  { id: 'mirror', kind: 'lake', x: -100, z: -112, r: 14, block: 12, name: 'Hồ Gương' },
+  { id: 'lotus', kind: 'lake', x: -30, z: 112, r: 10, block: 8.5, name: 'Ao Sen' },
+  { id: 'farm', kind: 'farm', x: 62, z: 112, r: 17, block: 0, name: 'Nông Trại Cối Xay' },
+  { id: 'sakura', kind: 'sakura', x: -95, z: 92, r: 22, block: 0, name: 'Rừng Anh Đào' },
+  { id: 'stones', kind: 'stones', x: 112, z: 98, r: 10, block: 0, name: 'Vòng Đá Cổ' },
+  { id: 'tower', kind: 'tower', x: -118, z: -30, r: 7, block: 3, name: 'Tháp Canh Đổ' },
+  { id: 'pyramid', kind: 'pyramid', x: 318, z: 250, r: 26, block: 19, name: 'Kim Tự Tháp' },
+  { id: 'oasis', kind: 'oasis', x: 222, z: -195, r: 15, block: 8, name: 'Ốc Đảo' },
+  { id: 'arch', kind: 'arch', x: 232, z: 186, r: 10, block: 0, name: 'Cổng Đá Đỏ' },
+  { id: 'icecastle', kind: 'icecastle', x: -250, z: 318, r: 22, block: 13, name: 'Thành Băng' },
+  { id: 'frozen', kind: 'frozenlake', x: 160, z: 258, r: 18, block: 0, name: 'Hồ Băng' },
+  { id: 'volcano', kind: 'volcano', x: 250, z: -315, r: 32, block: 24, name: 'Núi Lửa Hắc Diệm' },
+  { id: 'lavalake', kind: 'lavalake', x: 150, z: -232, r: 15, block: 12.5, name: 'Hồ Dung Nham' },
+  { id: 'lavapit', kind: 'lavalake', x: -170, z: -262, r: 11, block: 9, name: 'Hố Lửa' },
+  { id: 'bigtree', kind: 'bigtree', x: -330, z: 252, r: 16, block: 4.5, name: 'Cây Cổ Thụ Ngàn Năm' },
+  { id: 'deadbog', kind: 'boglake', x: -285, z: -250, r: 16, block: 13, name: 'Đầm Chết' },
+  { id: 'mushring', kind: 'mushring', x: -215, z: 185, r: 11, block: 0, name: 'Vòng Nấm Phát Sáng' },
+];
+export const landmarkAt = (x, z, pad = 0) => LANDMARKS.find(l => Math.hypot(x - l.x, z - l.z) < l.r + pad);
+
+/* ---- Treasure chests --------------------------------------------------------------------------
+ * Scattered over the map at fixed spots. Each player can open each chest once every CHEST_CD;
+ * outer regions hold richer ones.
+ */
+export const CHEST_CD = 20 * 60 * 1000;
+export const CHEST_LV = { core: 12, swamp: 55, desert: 60, snow: 75, volcano: 105 };
+export const CHESTS = (() => {
+  let seed = 7331;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const out = [], want = { core: 12, swamp: 8, desert: 8, snow: 8, volcano: 8 }, have = {};
+  for (let t = 0; t < 20000 && out.length < 44; t++) {
+    const x = (rnd() * 2 - 1) * (HALF - 20), z = (rnd() * 2 - 1) * (HALF - 20);
+    const region = regionAt(x, z);
+    if ((have[region] || 0) >= want[region]) continue;
+    if (Math.hypot(x, z) < VILLAGE_R + 10 || Math.abs(x - riverX(z)) < RIVER_HW + 4) continue;
+    if (CAMPS.some(c => Math.hypot(x - c.x, z - c.z) < c.r + 10)) continue;
+    if (CHECKPOINTS.some(c => Math.hypot(x - c.x, z - c.z) < 12) || landmarkAt(x, z, 4)) continue;
+    if (pathDist(x, z) < 5 || out.some(c => Math.hypot(x - c.x, z - c.z) < 45)) continue;
+    have[region] = (have[region] || 0) + 1;
+    const lv = CHEST_LV[region];
+    out.push({ id: out.length, x: Math.round(x * 10) / 10, z: Math.round(z * 10) / 10, region, gold: lv * 30, xp: Math.round(killXp({ lv }, lv) * 2.5) });
+  }
+  return out;
+})();

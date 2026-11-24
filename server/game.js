@@ -2,7 +2,7 @@ import {
   HALF, inWater, isSafe, CAMPS, ENEMIES, ENEMY_LIST, NPCS, NPC_RANGE, CHECKPOINTS, ARENA, STYLES, FINISHER, CRIT,
   MAX_LV, MASTERY_MAX, STAT_KEYS, ITEMS, SELL_AT, GEAR_SLOTS, POTION_CD, ANIMS, POWERS, PURGE_COST,
   DROPS, bossGems, QUEST_BY_ID, QUEST_MAX, BOARD_OFF, xpNeed, masteryNeed, killXp, pointsLeft, resetCost, maxHpFor, defReduceFor, dmgFor, critFor,
-  speedFor, masteryOf, styleOk, shrineStock, movesOf, unlockOf, aimKind, moveReach, moveHits, moveWindow, cleanAvatar, avatarCode,
+  speedFor, masteryOf, styleOk, shrineStock, movesOf, unlockOf, aimKind, moveReach, moveHits, moveWindow, cleanAvatar, avatarCode, CHESTS, CHEST_CD,
 } from '../shared/rules.js';
 
 const VIEW = 60;
@@ -317,6 +317,20 @@ export function createGame({ store, maxPlayers = 500, log = console }) {
       for (const k of STAT_KEYS) p.prog.stats[k] = 0;
       p.hp = Math.min(p.hp, maxHpFor(p.prog));
       markProg(p);
+    },
+    // A treasure chest: open when standing at it, once per CHEST_CD for each player.
+    chest(p, m, now) {
+      const c = Number.isInteger(m.id) && CHESTS[m.id];
+      if (!c || p.dead || p.match || Math.hypot(p.x - c.x, p.z - c.z) > 4.5) return;
+      if (now - (p.prog.chests[c.id] || 0) < CHEST_CD) return;
+      p.prog.chests[c.id] = now;
+      const gems = Math.random() < 0.3 ? 1 + Math.floor(Math.random() * 3) : 0;
+      const item = Math.random() < 0.4 ? (c.region === 'core' ? 'pot_s' : 'pot_l') : null;
+      if (item) addItem(p, item, 1);
+      p.prog.gold += c.gold; p.prog.gems += gems;
+      gainXp(p, c.xp);
+      markProg(p);
+      send(p, { t: 'chest', id: c.id, g: c.gold, xp: c.xp, gems, item });
     },
     // Looks from the character creator.
     avatar(p, m) {
