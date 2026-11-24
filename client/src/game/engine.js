@@ -1881,6 +1881,8 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyR') usePotion();
   if (e.code === 'KeyM') openModal('map');
   if (e.code === 'KeyC') openModal('stats');
+  if (e.code === 'KeyV') dance();
+  if (e.code === 'KeyT') openModal('top');
   if (e.code === 'Escape') closeModal();
 });
 addEventListener('keyup', (e) => { keys[e.code] = false; if (e.code === 'KeyJ' || e.code === 'Space') atkHeld = false; });
@@ -1897,6 +1899,7 @@ Object.assign(game, {
   statReset: () => net.send({ t: 'sreset' }),
   openCreator: () => openCreator(),
   toggleSound: () => { ui.sound = sound.toggle(); },
+  dance: () => dance(),
   previewAvatar: (a) => previewAvatar(a),
   saveAvatar: (a) => saveAvatar(a),
   swap: () => swapStyle(),
@@ -2117,9 +2120,17 @@ function updatePlayer(dt, time) {
   if (P.shieldT > 0) { player.bubble.material.color.setHex(P.shieldColor || 0x9fe8ff); player.bubble.scale.setScalar(1 + Math.sin(time * 6) * 0.03); }
   updateAim();
   if (atkHeld) attack();
+  if (moving || P.actT > 0.3) P.dance = false;
   if (P.actT <= 0) {
     if (moving) player.play('Running_A', { fade: 0.15, speed: clamp(il, 0.5, 1) * 1.1 });
-    else player.play(idleAnim(), { fade: 0.2 });
+    else player.play(P.dance ? 'Dance' : idleAnim(), { fade: 0.2 });
+  }
+  // Dust kicked up while running, in the color of the ground.
+  P.dustT = (P.dustT || 0) - dt;
+  if (moving && P.dustT <= 0 && !P.arena) {
+    P.dustT = 0.16;
+    const w = regionWeights(P.x, P.z), c = w.snow > 0.5 ? 0xf4f8ff : w.desert > 0.5 ? 0xe4c890 : w.volcano > 0.5 ? 0x5a4a44 : w.swamp > 0.5 ? 0x5a6a44 : 0xb8a07a;
+    spawnBurst(P.x - Math.sin(P.rot) * 0.4, 0.1, P.z - Math.cos(P.rot) * 0.4, c, 1, 0.9);
   }
   r.position.set(P.x, 0, P.z);
   r.rotation.y = lerpAngle(r.rotation.y, P.rot, 1 - Math.exp(-dt * (acting ? 30 : 16)));
@@ -2179,6 +2190,11 @@ function updateLandmarks(dt, time) {
   for (const m of L.glow) m.emissiveIntensity = 0.5 + Math.sin(time * 2.3) * 0.2 + night * 0.6;
   for (const w of L.water) w.m.color.copy(w.base).offsetHSL(0, 0, Math.sin(time * 1.3) * 0.02 - night * 0.12);
   L.castle.forEach((o, i) => { o.userData.y ??= o.position.y; o.position.y = o.userData.y + Math.sin(time * 1.2 + i) * 0.3; o.rotation.y += dt * 0.3; });
+}
+function dance() {
+  if (P.dead || P.dash || P.leap || P.actT > 0) return;
+  P.dance = !P.dance;
+  if (P.dance) { player.play('Dance', { fade: 0.2 }); spawnBurst(P.x, 2.6, P.z, 0xff8ac8, 6, 2); }
 }
 function splash(x, z, loud) {
   spawnRing(x, z, loud ? 1.2 : 0.35, 0xd8ecff, loud ? 0.5 : 0.3);

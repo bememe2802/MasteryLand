@@ -14,6 +14,7 @@ import PurgeSheet from './components/PurgeSheet.vue';
 import QuestSheet from './components/QuestSheet.vue';
 import QuestTracker from './components/QuestTracker.vue';
 import CreatorPanel from './components/CreatorPanel.vue';
+import TopSheet from './components/TopSheet.vue';
 import { autoFullscreenOnFirstTap } from './fullscreen.js';
 
 autoFullscreenOnFirstTap();
@@ -37,6 +38,7 @@ const reload = () => location.reload();
   <QuestSheet v-if="ui.modal === 'quest' && ui.prog" />
   <ArenaSheet v-if="ui.modal === 'arena'" />
   <MapSheet v-if="ui.modal === 'map'" />
+  <TopSheet v-if="ui.modal === 'top'" />
   <div v-if="ui.modal === 'kicked'" class="modal">
     <div class="sheet frame center">
       <div class="sheet-body">

@@ -122,6 +122,22 @@ app.post('/api/me/name', limiter(10, 60000), auth, (req, res) => {
   game.rename(req.user.id, name);
   res.json({ user: publicUser(store.q.userById.get(req.user.id)) });
 });
+// Leaderboards: highest levels and best arena ratings, refreshed at most every 30 seconds.
+// Players online count with their live progress, which is newer than what is saved.
+let top = null, topAt = 0;
+app.get('/api/top', (req, res) => {
+  if (!top || Date.now() - topAt > 30000) {
+    const rows = store.db.prepare("SELECT id, name, rating, wins, json_extract(progress, '$.level') AS level, json_extract(progress, '$.xp') AS xp FROM users WHERE banned = 0 AND named = 1").all();
+    const live = game.levels();
+    for (const r of rows) { const l = live.get(r.id); if (l) Object.assign(r, l); r.level ||= 1; r.xp ||= 0; }
+    top = {
+      level: [...rows].sort((a, b) => b.level - a.level || b.xp - a.xp).slice(0, 20).map(r => ({ name: r.name, level: r.level, on: live.has(r.id) })),
+      arena: [...rows].sort((a, b) => b.rating - a.rating || b.wins - a.wins).slice(0, 20).map(r => ({ name: r.name, rating: r.rating, wins: r.wins, on: live.has(r.id) })),
+    };
+    topAt = Date.now();
+  }
+  res.json(top);
+});
 app.post('/api/logout', (req, res) => { store.dropSession(bearer(req)); res.json({ ok: true }); });
 
 // dist/assets holds the hashed bundles and the 3D models, both safe to cache.

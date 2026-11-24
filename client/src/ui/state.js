@@ -44,7 +44,7 @@ export const input = { joyX: 0, joyY: 0, atkHeld: false };
 
 export const game = {
   attack() {}, skill(i) {}, aim(i, phase, dx, dy, k, cancel) { return false; }, stat(k, n) {}, statReset() {},
-  openCreator() {}, toggleSound() {}, previewAvatar(a) {}, saveAvatar(a) {}, swap() {}, potion() {}, interact() {},
+  openCreator() {}, toggleSound() {}, dance() {}, previewAvatar(a) {}, saveAvatar(a) {}, swap() {}, potion() {}, interact() {},
   buy(id, qty) {}, sell(id, qty) {}, equip(slot, id) {}, use(id) {}, purge() {}, quest(kind, id) {},
   toggleQueue() {}, rename: async (name) => {}, logout() {},
   drawBigMap(canvas) {},

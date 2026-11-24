@@ -540,6 +540,7 @@ export function createGame({ store, maxPlayers = 500, log = console }) {
   return {
     attach,
     get size() { return online.size; },
+    levels() { return new Map([...online.values()].map(p => [p.id, { level: p.prog.level, xp: p.prog.xp }])); },
     rename(id, name) {
       const p = online.get(id);
       if (p) p.name = name;

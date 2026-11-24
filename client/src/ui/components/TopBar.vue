@@ -16,6 +16,7 @@ import { fs, toggleFullscreen } from '../fullscreen.js';
   </div>
   <!-- Drawn by the engine ten times a second; Vue only owns the element and the click. -->
   <button class="bagbtn act sm hex frame" aria-label="Kho đồ" @click="openModal('bag')"><span class="ms">backpack</span></button>
+  <button class="lbbtn act sm hex frame" aria-label="Bảng xếp hạng" @click="openModal('top')"><span class="ms">leaderboard</span></button>
   <button class="sndbtn act sm hex frame" :aria-label="ui.sound ? 'Tắt âm thanh' : 'Bật âm thanh'" @click="game.toggleSound()"><span class="ms">{{ ui.sound ? 'volume_up' : 'volume_off' }}</span></button>
   <button v-if="fs.show" class="fsbtn act sm hex frame" :aria-label="fs.on ? 'Thoát toàn màn hình' : 'Toàn màn hình'" @click="toggleFullscreen"><span class="ms">{{ fs.on ? 'fullscreen_exit' : 'fullscreen' }}</span></button>
   <div class="mm frame" @click="openModal('map')"><canvas id="minimap" width="200" height="200"></canvas></div>
